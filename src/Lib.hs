@@ -100,11 +100,13 @@ hitSphere center radius ray =
       discriminant = b * b - 4 * a * c
   in discriminant > 0
 
-color :: (Fractional a, Floating a) => Ray a -> Vec3 a
+color :: (Fractional a, Floating a, Ord a) => Ray a -> Vec3 a
 color r =
-  let unitDirection = makeUnitVector (direction r)
-      t = 0.5 * (vecY unitDirection + 1.0)
-   in scale (1.0 - t) (Vec3 1.0 1.0 1.0) + scale t (Vec3 0.5 0.7 1.0)
+  if hitSphere (Vec3 0.0 0.0 (-1.0)) 0.5 r
+    then Vec3 1.0 0.0 0.0
+    else let unitDirection = makeUnitVector (direction r)
+             t = 0.5 * (vecY unitDirection + 1.0)
+          in scale (1.0 - t) (Vec3 1.0 1.0 1.0) + scale t (Vec3 0.5 0.7 1.0)
 
 pixelPositions :: Int -> Int -> [[(Int, Int)]]
 pixelPositions nx ny = map (\y -> map (, y) [0 .. nx - 1]) [ny - 1,ny - 2 .. 0]
