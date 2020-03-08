@@ -8,7 +8,11 @@ type RGB = Vec3 Int
 
 type XYZ = Vec3 Double
 
-data Vec3 a = Vec3 a a a
+data Vec3 a = Vec3
+  { vecX :: a
+  , vecY :: a
+  , vecZ :: a
+  }
 
 instance Functor Vec3 where
   fmap f (Vec3 x y z) = Vec3 (f x) (f y) (f z)
@@ -64,27 +68,8 @@ g (Vec3 _ y _) = y
 b :: RGB -> Int
 b (Vec3 _ _ z) = z
 
-x :: XYZ -> Double
-x (Vec3 x _ _) = x
-
-y :: XYZ -> Double
-y (Vec3 _ y _) = y
-
-z :: XYZ -> Double
-z (Vec3 _ _ z) = z
-
-pixelPositions :: Int -> Int -> [[(Int, Int)]]
-pixelPositions nx ny = map (\y -> map (, y) [0..nx-1]) [ny-1, ny-2..0]
---pixelPositions nx ny = map (\y -> map (, y) [0..nx-1]) [0..ny-1]
-
-posToRGB :: Int -> Int -> (Int, Int) -> Vec3 Double
-posToRGB nx ny (x, y) = let r = fromIntegral x / fromIntegral nx
-                            g = fromIntegral y / fromIntegral ny
-                            b = 0.2
-                        in Vec3 r g b
-
 scaleColor :: Double -> Int
-scaleColor x = round (255.99 * x)
+scaleColor x = floor (255.99 * x)
 
 printRow :: [Vec3 Int] -> IO ()
 printRow row = putStrLn $ showRow row
@@ -98,17 +83,34 @@ data Ray a = Ray
   , direction :: Vec3 a
   } deriving Show
 
-
 pointAtParameter :: Floating a => Ray a -> a -> Vec3 a
 pointAtParameter r t = origin r + scale t (direction r)
+
+pixelPositions :: Int -> Int -> [[(Int, Int)]]
+pixelPositions nx ny = map (\y -> map (, y) [0 .. nx - 1]) [ny - 1,ny - 2 .. 0]
 
 someFunc :: IO ()
 someFunc = do
   let nx = 200
   let ny = 100
-  let pp = pixelPositions nx ny
-  let vals = map (map (fmap scaleColor . posToRGB nx ny)) pp
   putStrLn "P3"
   putStrLn $ show nx ++ " " ++ show ny
   putStrLn "255"
+  let lowerLeftCorner = Vec3 (-2.0) (-1.0) (-1.0)
+  let horizontal = Vec3 4.0 0.0 0.0
+  let vertical = Vec3 0.0 2.0 0.0
+  let o = Vec3 0.0 0.0 0.0
+  let pp = pixelPositions nx ny
+  let color :: (Fractional a, Floating a) => Ray a -> Vec3 a
+      color r =
+        let unitDirection = makeUnitVector (direction r)
+            t = 0.5 * (vecY unitDirection + 1.0)
+         in scale (1.0 - t) (Vec3 1.0 1.0 1.0) + scale t (Vec3 0.5 0.7 1.0)
+  let renderPos :: (Int, Int) -> Vec3 Double
+      renderPos (x, y) =
+        let u = fromIntegral x / fromIntegral nx
+            v = fromIntegral y / fromIntegral ny
+            r = Ray o (lowerLeftCorner + scale u horizontal + scale v vertical)
+         in color r
+  let vals = map (map (fmap scaleColor . renderPos)) pp
   mapM_ printRow vals
