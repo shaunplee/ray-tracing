@@ -83,29 +83,52 @@ showRow :: [RGB] -> String
 showRow row = unwords $ fmap show row
 
 
-data Ray a = Ray
-  { origin    :: Vec3 a
-  , direction :: Vec3 a
+data Ray = Ray
+  { origin    :: XYZ
+  , direction :: XYZ
   } deriving Show
 
-pointAtParameter :: Floating a => Ray a -> a -> Vec3 a
+data Hit = Hit
+  { hit_t      :: Double
+  , hit_p      :: XYZ
+  , hit_normal :: XYZ
+  }
+
+class Hittable b where
+  hit :: b -> Ray -> Double -> Double -> Hit -> Bool
+
+data Sphere = Sphere
+  { center :: Vec3 Double
+  , radius :: Double
+  }
+
+instance Hittable Sphere where
+  hit sphere r t_min t_max hit_rec =
+    let oc = origin r  - center sphere
+    in undefined
+
+pointAtParameter :: Ray -> Double -> XYZ
 pointAtParameter r t = origin r + scale t (direction r)
 
-hitSphere :: (Floating a, Num a, Ord a) => Vec3 a -> a -> Ray a -> Bool
+hitSphere :: XYZ -> Double -> Ray -> Double
 hitSphere center radius ray =
   let oc = origin ray - center
       a = dot (direction ray) (direction ray)
       b = 2.0 * dot oc (direction ray)
       c = dot oc oc - (radius * radius)
       discriminant = b * b - 4 * a * c
-  in discriminant > 0
+  in if discriminant < 0.0
+     then (-1.0)
+     else ((-b) - sqrt discriminant) / (2.0 * a)
 
-color :: (Fractional a, Floating a, Ord a) => Ray a -> Vec3 a
+color :: Ray -> Vec3 Double
 color r =
-  if hitSphere (Vec3 0.0 0.0 (-1.0)) 0.5 r
-    then Vec3 1.0 0.0 0.0
-    else let unitDirection = makeUnitVector (direction r)
-             t = 0.5 * (vecY unitDirection + 1.0)
+  let t = hitSphere (Vec3 0.0 0.0 (-1.0)) 0.5 r
+  in if t > 0.0
+     then let n = makeUnitVector (pointAtParameter r t - Vec3 0.0 0.0 (-1.0))
+          in scale 0.5 (n + Vec3 1.0 1.0 1.0)
+     else let unitDirection = makeUnitVector (direction r)
+              t = 0.5 * (vecY unitDirection + 1.0)
           in scale (1.0 - t) (Vec3 1.0 1.0 1.0) + scale t (Vec3 0.5 0.7 1.0)
 
 pixelPositions :: Int -> Int -> [[(Int, Int)]]
@@ -113,8 +136,8 @@ pixelPositions nx ny = map (\y -> map (, y) [0 .. nx - 1]) [ny - 1,ny - 2 .. 0]
 
 someFunc :: IO ()
 someFunc = do
-  let nx = 200
-  let ny = 100
+  let nx = 400
+  let ny = 200
   putStrLn "P3"
   putStrLn $ show nx ++ " " ++ show ny
   putStrLn "255"
