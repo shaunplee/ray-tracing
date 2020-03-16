@@ -1,10 +1,12 @@
+{-# LANGUAGE MultiWayIf    #-}
 {-# LANGUAGE TupleSections #-}
 
 module Lib
     ( someFunc
     ) where
 
-import           Data.Word (Word8)
+import           Data.Foldable (foldl')
+import           Data.Word     (Word8)
 
 type RGB = Vec3 Word8
 
@@ -95,17 +97,44 @@ data Hit = Hit
   }
 
 class Hittable b where
-  hit :: b -> Ray -> Double -> Double -> Hit -> Bool
+  hit :: b -> Ray -> Double -> Double -> Maybe Hit
 
 data Sphere = Sphere
-  { center :: Vec3 Double
-  , radius :: Double
+  { sphere_center :: Vec3 Double
+  , sphere_radius :: Double
   }
 
 instance Hittable Sphere where
-  hit sphere r t_min t_max hit_rec =
-    let oc = origin r  - center sphere
-    in undefined
+  hit sphere r t_min t_max =
+    let oc = origin r - sphere_center sphere
+        a = dot (direction r) (direction r)
+        b = dot oc (direction r)
+        c = dot oc oc - (sphere_radius sphere * sphere_radius sphere)
+        discriminant = b * b - a * c
+     in if discriminant > 0
+          then let temp1 = ((-b) - sqrt discriminant) / a
+                   temp2 = ((-b) + sqrt discriminant) / a
+                in if | temp1 < t_max && temp1 > t_min -> Just $ recHit temp1
+                      | temp2 < t_max && temp2 > t_min -> Just $ recHit temp2
+                      | otherwise -> Nothing
+          else Nothing
+    where
+      recHit temp =
+        let p = pointAtParameter r temp
+            n = divide (p - sphere_center sphere) (sphere_radius sphere)
+         in Hit temp p n
+
+hitList :: Hittable a => [a] -> Ray -> Double -> Double -> Maybe Hit
+hitList htbls r t_min t_max =
+  foldl'
+    (\mh htbl ->
+       case mh of
+         Nothing -> hit htbl r t_min t_max
+         Just h  -> case hit htbl r t_min (hit_t h) of
+           Nothing -> mh
+           h1      -> h1)
+    Nothing
+    htbls
 
 pointAtParameter :: Ray -> Double -> XYZ
 pointAtParameter r t = origin r + scale t (direction r)
@@ -121,15 +150,14 @@ hitSphere center radius ray =
      then (-1.0)
      else ((-b) - sqrt discriminant) / (2.0 * a)
 
-color :: Ray -> Vec3 Double
-color r =
-  let t = hitSphere (Vec3 0.0 0.0 (-1.0)) 0.5 r
-  in if t > 0.0
-     then let n = makeUnitVector (pointAtParameter r t - Vec3 0.0 0.0 (-1.0))
-          in scale 0.5 (n + Vec3 1.0 1.0 1.0)
-     else let unitDirection = makeUnitVector (direction r)
-              t = 0.5 * (vecY unitDirection + 1.0)
-          in scale (1.0 - t) (Vec3 1.0 1.0 1.0) + scale t (Vec3 0.5 0.7 1.0)
+color :: Hittable a => Ray -> [a] -> Vec3 Double
+color r htbls =
+  case hitList htbls r 0.0 (read "Infinity" :: Double) of
+    Just h -> scale 0.5 (hit_normal h + Vec3 1.0 1.0 1.0)
+    Nothing ->
+      let unitDirection = makeUnitVector (direction r)
+          t = 0.5 * (vecY unitDirection + 1.0)
+       in scale (1.0 - t) (Vec3 1.0 1.0 1.0) + scale t (Vec3 0.5 0.7 1.0)
 
 pixelPositions :: Int -> Int -> [[(Int, Int)]]
 pixelPositions nx ny = map (\y -> map (, y) [0 .. nx - 1]) [ny - 1,ny - 2 .. 0]
@@ -146,11 +174,14 @@ someFunc = do
   let vertical = Vec3 0.0 2.0 0.0
   let o = Vec3 0.0 0.0 0.0
   let pp = pixelPositions nx ny
+  let world =
+        [ Sphere (Vec3 0.0 0.0 (-1.0)) 0.5
+        , Sphere (Vec3 0.0 (-100.5) (-1.0)) 100]
   let renderPos :: (Int, Int) -> Vec3 Double
       renderPos (x, y) =
         let u = fromIntegral x / fromIntegral nx
             v = fromIntegral y / fromIntegral ny
             r = Ray o (lowerLeftCorner + scale u horizontal + scale v vertical)
-         in color r
+         in color r world
   let vals = map (map (scaleColors . renderPos)) pp
   mapM_ printRow vals
