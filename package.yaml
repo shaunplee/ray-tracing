@@ -24,6 +24,8 @@ dependencies:
 
 library:
   source-dirs: src
+  dependencies:
+    - random
 
 executables:
   ray-tracing-exe:

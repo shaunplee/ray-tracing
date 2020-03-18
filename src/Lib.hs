@@ -5,8 +5,10 @@ module Lib
     ( someFunc
     ) where
 
+import           Control.Monad (foldM)
 import           Data.Foldable (foldl')
 import           Data.Word     (Word8)
+import           System.Random (randomIO)
 
 type RGB = Vec3 Word8
 
@@ -150,6 +152,27 @@ hitSphere center radius ray =
      then (-1.0)
      else ((-b) - sqrt discriminant) / (2.0 * a)
 
+data Camera = Camera
+  { camera_origin :: XYZ
+  , camera_llc    :: XYZ
+  , camera_horiz  :: XYZ
+  , camera_vert   :: XYZ
+  }
+
+getRay :: Camera -> Double -> Double -> Ray
+getRay c u v =
+  Ray
+    (camera_origin c)
+    (camera_llc c + scale u (camera_horiz c) + scale v (camera_vert c) -
+     camera_origin c)
+
+defaultCamera :: Camera
+defaultCamera = let lowerLeftCorner = Vec3 (-2.0) (-1.0) (-1.0)
+                    horizontal      = Vec3 4.0 0.0 0.0
+                    vertical        = Vec3 0.0 2.0 0.0
+                    origin          = Vec3 0.0 0.0 0.0
+                 in Camera origin lowerLeftCorner horizontal vertical
+
 color :: Hittable a => Ray -> [a] -> Vec3 Double
 color r htbls =
   case hitList htbls r 0.0 (read "Infinity" :: Double) of
@@ -166,22 +189,26 @@ someFunc :: IO ()
 someFunc = do
   let nx = 400
   let ny = 200
+  let ns = 100
   putStrLn "P3"
   putStrLn $ show nx ++ " " ++ show ny
   putStrLn "255"
-  let lowerLeftCorner = Vec3 (-2.0) (-1.0) (-1.0)
-  let horizontal = Vec3 4.0 0.0 0.0
-  let vertical = Vec3 0.0 2.0 0.0
-  let o = Vec3 0.0 0.0 0.0
-  let pp = pixelPositions nx ny
   let world =
         [ Sphere (Vec3 0.0 0.0 (-1.0)) 0.5
         , Sphere (Vec3 0.0 (-100.5) (-1.0)) 100]
-  let renderPos :: (Int, Int) -> Vec3 Double
-      renderPos (x, y) =
-        let u = fromIntegral x / fromIntegral nx
-            v = fromIntegral y / fromIntegral ny
-            r = Ray o (lowerLeftCorner + scale u horizontal + scale v vertical)
-         in color r world
-  let vals = map (map (scaleColors . renderPos)) pp
-  mapM_ printRow vals
+  let cam = defaultCamera
+  let pp = pixelPositions nx ny
+  let sampleColor :: (Int, Int) -> Vec3 Double -> Int -> IO (Vec3 Double)
+      sampleColor (x, y) accCol _ = do
+        ru <- randomIO :: IO Double
+        rv <- randomIO :: IO Double
+        let u = (fromIntegral x + ru) / fromIntegral nx
+        let v = (fromIntegral y + rv) / fromIntegral ny
+        let r = getRay cam u v
+        return $ accCol + color r world
+  let renderPos :: (Int, Int) -> IO (Vec3 Double)
+      renderPos (x, y) = do
+        summedColor <- foldM (sampleColor (x, y)) (Vec3 0.0 0.0 0.0) [0..ns-1]
+        return $ divide summedColor (fromIntegral ns)
+  vals <- mapM (mapM renderPos) pp
+  mapM_ (printRow . map scaleColors) vals
