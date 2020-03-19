@@ -1,5 +1,6 @@
-{-# LANGUAGE MultiWayIf    #-}
-{-# LANGUAGE TupleSections #-}
+{-# LANGUAGE ForeignFunctionInterface #-}
+{-# LANGUAGE MultiWayIf               #-}
+{-# LANGUAGE TupleSections            #-}
 
 module Lib
     ( someFunc
@@ -9,6 +10,13 @@ import           Control.Monad (foldM)
 import           Data.Foldable (foldl')
 import           Data.Word     (Word8)
 import           System.Random (randomIO)
+
+foreign import ccall "random" c_random :: IO Int
+c_rand_max :: Int
+c_rand_max = 2147483647
+
+cRandMax :: Double
+cRandMax = fromIntegral (c_rand_max + 1)
 
 type RGB = Vec3 Word8
 
@@ -152,11 +160,16 @@ hitSphere center radius ray =
      then (-1.0)
      else ((-b) - sqrt discriminant) / (2.0 * a)
 
+cRandomDoubleIO :: IO Double
+cRandomDoubleIO = do
+  r <- c_random
+  return $ (fromIntegral r :: Double) / cRandMax
+
 randomInUnitSphere :: IO (Vec3 Double)
 randomInUnitSphere = do
-  x <- randomIO
-  y <- randomIO
-  z <- randomIO
+  x <- cRandomDoubleIO
+  y <- cRandomDoubleIO
+  z <- cRandomDoubleIO
   let p = scale 2.0 (Vec3 x y z) - Vec3 1.0 1.0 1.0
   if squaredLength p < 1.0 then return p else randomInUnitSphere
 
@@ -213,8 +226,8 @@ someFunc = do
   let pp = pixelPositions nx ny
   let sampleColor :: (Int, Int) -> Vec3 Double -> Int -> IO (Vec3 Double)
       sampleColor (x, y) accCol _ = do
-        ru <- randomIO :: IO Double
-        rv <- randomIO :: IO Double
+        ru <- cRandomDoubleIO
+        rv <- cRandomDoubleIO
         let u = (fromIntegral x + ru) / fromIntegral nx
         let v = (fromIntegral y + rv) / fromIntegral ny
         let r = getRay cam u v
