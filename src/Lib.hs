@@ -16,7 +16,7 @@ c_rand_max :: Int
 c_rand_max = 2147483647
 
 cRandMax :: Double
-cRandMax = fromIntegral (c_rand_max + 1)
+cRandMax = fromIntegral c_rand_max
 
 type RGB = Vec3 Word8
 
@@ -233,9 +233,9 @@ someFunc = do
         let r = getRay cam u v
         c1 <- color r world
         return $ accCol + c1
-  let renderPos :: (Int, Int) -> IO (Vec3 Double)
+  let renderPos :: (Int, Int) -> IO RGB
       renderPos (x, y) = do
         summedColor <- foldM (sampleColor (x, y)) (Vec3 0.0 0.0 0.0) [0..ns-1]
-        return $ divide summedColor (fromIntegral ns)
+        return $ scaleColors $ divide summedColor (fromIntegral ns)
   vals <- mapM (mapM renderPos) pp
-  mapM_ (printRow . map scaleColors) vals
+  mapM_ printRow vals
