@@ -5,9 +5,10 @@ module Lib
     ( someFunc
     ) where
 
-import           Control.Monad (foldM)
-import           Data.Foldable (foldl', foldrM)
-import           Data.Word     (Word8)
+import           Control.Monad.State.Strict (State (..), evalState, get, put,
+                                             runState)
+import           Data.Foldable              (foldl')
+import           Data.Word                  (Word8)
 import           System.Random
 
 -- Number of samples to use when anti-aliasing
@@ -23,6 +24,8 @@ ny = 100
 world :: [Shape]
 world =
   [Sphere (Vec3 (0.0, 0.0, -1.0)) 0.5, Sphere (Vec3 (0.0, -100.5, -1.0)) 100]
+
+type RandomState = State StdGen
 
 type RGB = Vec3 Word8
 
@@ -232,19 +235,23 @@ sampleColor (x, y) (accCol, gen) _ =
       c1 = color g3 r world
    in (accCol + c1, g4)
 
-renderPos :: RandomGen rg => (rg, [RGB]) -> (Int, Int) -> (rg, [RGB])
-renderPos (gen, ps) (x, y) =
+renderPos :: (Int, Int) -> RandomState RGB
+renderPos (x, y) = do
+  gen <- get
   let (summedColor, g1) =
         foldr
           (flip $ sampleColor (x, y))
           (Vec3 (0.0, 0.0, 0.0), gen)
           [0 .. ns - 1]
-   in (g1, scaleColors (divide summedColor (fromIntegral ns)) : ps)
+  put g1
+  return $ scaleColors (divide summedColor (fromIntegral ns))
 
-renderRow :: RandomGen rg => (rg, [[RGB]]) -> [(Int, Int)] -> (rg, [[RGB]])
-renderRow (gen, rs) ps =
-  let (g1, r) = foldr (flip renderPos) (gen, []) ps
-   in (g1, r : rs)
+renderRow :: [(Int, Int)] -> RandomState [RGB]
+renderRow ps = do
+  gen <- get
+  let (r, g1) = runState (mapM renderPos ps) gen
+  put g1
+  return r
 
 pixelPositions :: Int -> Int -> [[(Int, Int)]]
 pixelPositions nx ny = map (\y -> map (, y) [0 .. nx - 1]) [ny - 1,ny - 2 .. 0]
@@ -257,5 +264,5 @@ someFunc = do
   let cam = defaultCamera
   let pp = pixelPositions nx ny
   gen <- getStdGen
-  let (_, vals) = foldl' renderRow (gen, []) pp
+  let vals = evalState (mapM renderRow pp) gen
   mapM_ printRow vals

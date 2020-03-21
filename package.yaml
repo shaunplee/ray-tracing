@@ -26,6 +26,7 @@ library:
   source-dirs: src
   dependencies:
     - random
+    - mtl
 
 executables:
   ray-tracing-exe:
