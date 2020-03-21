@@ -1,6 +1,5 @@
-{-# LANGUAGE ForeignFunctionInterface #-}
-{-# LANGUAGE MultiWayIf               #-}
-{-# LANGUAGE TupleSections            #-}
+{-# LANGUAGE MultiWayIf    #-}
+{-# LANGUAGE TupleSections #-}
 
 module Lib
     ( someFunc
@@ -9,13 +8,21 @@ module Lib
 import           Control.Monad (foldM)
 import           Data.Foldable (foldl', foldrM)
 import           Data.Word     (Word8)
+import           System.Random
 
-foreign import ccall "random" c_random :: IO Int
-c_rand_max :: Int
-c_rand_max = 2147483647
+-- Number of samples to use when anti-aliasing
+ns :: Int
+ns = 100
 
-cRandMax :: Double
-cRandMax = fromIntegral c_rand_max
+-- X and Y dimensions of output image
+nx :: Int
+nx = 200
+ny :: Int
+ny = 100
+
+world :: [Shape]
+world =
+  [Sphere (Vec3 (0.0, 0.0, -1.0)) 0.5, Sphere (Vec3 (0.0, -100.5, -1.0)) 100]
 
 type RGB = Vec3 Word8
 
@@ -33,30 +40,30 @@ vecZ :: Vec3 a -> a
 vecZ (Vec3 (_, _, z)) = z
 
 instance Functor Vec3 where
-  fmap f (Vec3 (x, y, z)) = Vec3 ((f x), (f y), (f z))
+  fmap f (Vec3 (x, y, z)) = Vec3 (f x, f y, f z)
 
 instance Show a => Show (Vec3 a) where
   show (Vec3 (x, y, z)) = show x ++ " " ++ show y ++ " " ++ show z
 
 instance (Floating a, Num a) => Num (Vec3 a) where
   (+) (Vec3 (x1, y1, z1)) (Vec3 (x2, y2, z2)) =
-    Vec3 ((x1 + x2), (y1 + y2), (z1 + z2))
+    Vec3 (x1 + x2, y1 + y2, z1 + z2)
   (-) (Vec3 (x1, y1, z1)) (Vec3 (x2, y2, z2)) =
-    Vec3 ((x1 - x2), (y1 - y2), (z1 - z2))
+    Vec3 (x1 - x2, y1 - y2, z1 - z2)
   (*) (Vec3 (x1, y1, z1)) (Vec3 (x2, y2, z2)) =
-    Vec3 ((x1 * x2), (y1 * y2), (z1 * z2))
-  negate (Vec3 (x, y, z)) = Vec3 ((-x), (-y), (-z))
+    Vec3 (x1 * x2, y1 * y2, z1 * z2)
+  negate (Vec3 (x, y, z)) = Vec3 (-x, -y, -z)
   --this definition of abs is clearly wrong, as it should be a scalar
   --not a vector
-  abs (Vec3 (x, y, z)) = Vec3 ((sqrt (x * x + y * y + z * z)), 0, 0)
+  abs (Vec3 (x, y, z)) = Vec3 (sqrt (x * x + y * y + z * z), 0, 0)
   signum v@(Vec3 (x, y, z)) =
     let (Vec3 (m, _, _)) = abs v
-     in Vec3 ((x / m), (y / m), (z / m))
-  fromInteger x = Vec3 ((fromInteger x), 0, 0)
+     in Vec3 (x / m, y / m, z / m)
+  fromInteger x = Vec3 (fromInteger x, 0, 0)
 
 vecDiv :: Fractional a => Vec3 a -> Vec3 a -> Vec3 a
 vecDiv (Vec3 (x1, y1, z1)) (Vec3 (x2, y2, z2)) =
-  Vec3 ((x1 / x2), (y1 / y2), (z1 / z2))
+  Vec3 (x1 / x2, y1 / y2, z1 / z2)
 
 length :: (Floating a, Num a) => Vec3 a -> a
 length v = let (Vec3 (l, _, _)) = abs v in l
@@ -68,27 +75,27 @@ makeUnitVector :: (Floating a) => Vec3 a -> Vec3 a
 makeUnitVector = signum
 
 scale :: (Floating a) => a -> Vec3 a -> Vec3 a
-scale k (Vec3 (x, y, z)) = Vec3 ((k * x), (k * y), (k * z))
+scale k (Vec3 (x, y, z)) = Vec3 (k * x, k * y, k * z)
 
 divide :: (Floating a) => Vec3 a -> a -> Vec3 a
-divide (Vec3 (x, y, z)) k = Vec3 ((x / k), (y / k), (z / k))
+divide (Vec3 (x, y, z)) k = Vec3 (x / k, y / k, z / k)
 
 dot :: Num a => Vec3 a -> Vec3 a -> a
 dot (Vec3 (x1, y1, z1)) (Vec3 (x2, y2, z2)) = x1 * x2 + y1 * y2 + z1 * z2
 
 cross :: Num a => Vec3 a -> Vec3 a -> Vec3 a
 cross (Vec3 (x1, y1, z1)) (Vec3 (x2, y2, z2)) =
-  Vec3 ((y1 * z2 - z1 * y2), (z1 * x2 - x1 * z2), (x1 * y2 - y1 * x2))
+  Vec3 (y1 * z2 - z1 * y2, z1 * x2 - x1 * z2, x1 * y2 - y1 * x2)
 
 
-r :: RGB -> Word8
-r (Vec3 (x, _, _)) = x
+rgbr :: RGB -> Word8
+rgbr (Vec3 (x, _, _)) = x
 
-g :: RGB -> Word8
-g (Vec3 (_, y, _)) = y
+rgbg :: RGB -> Word8
+rgbg (Vec3 (_, y, _)) = y
 
-b :: RGB -> Word8
-b (Vec3 (_, _, z)) = z
+rgbb :: RGB -> Word8
+rgbb (Vec3 (_, _, z)) = z
 
 scaleColor :: Double -> Word8
 scaleColor x = floor (255.99 * sqrt x)
@@ -117,12 +124,12 @@ data Hit = Hit
 class Hittable b where
   hit :: b -> Ray -> Double -> Double -> Maybe Hit
 
-data Sphere = Sphere
+data Shape = Sphere
   { sphere_center :: Vec3 Double
   , sphere_radius :: Double
   }
 
-instance Hittable Sphere where
+instance Hittable Shape where
   hit sphere r t_min t_max =
     let oc = origin r - sphere_center sphere
         a = dot (direction r) (direction r)
@@ -168,18 +175,15 @@ hitSphere center radius ray =
      then (-1.0)
      else ((-b) - sqrt discriminant) / (2.0 * a)
 
-cRandomDoubleIO :: IO Double
-cRandomDoubleIO = do
-  r <- c_random
-  return $ (fromIntegral r :: Double) / cRandMax
-
-randomInUnitSphere :: IO (Vec3 Double)
-randomInUnitSphere = do
-  x <- cRandomDoubleIO
-  y <- cRandomDoubleIO
-  z <- cRandomDoubleIO
-  let p = scale 2.0 (Vec3 (x, y, z)) - Vec3 (1.0, 1.0, 1.0)
-  if squaredLength p < 1.0 then return p else randomInUnitSphere
+randomInUnitSphere :: RandomGen g => g -> (Vec3 Double, g)
+randomInUnitSphere gen =
+  let (x, g1) = random gen
+      (y, g2) = random g1
+      (z, g3) = random g2
+      p = scale 2.0 (Vec3 (x, y, z)) - Vec3 (1.0, 1.0, 1.0)
+   in if squaredLength p < 1.0
+        then (p, g3)
+        else randomInUnitSphere g3
 
 data Camera = Camera
   { camera_origin :: XYZ
@@ -196,60 +200,62 @@ getRay c u v =
      camera_origin c)
 
 defaultCamera :: Camera
-defaultCamera = let lowerLeftCorner = Vec3 ((-2.0), (-1.0), (-1.0))
+defaultCamera = let lowerLeftCorner = Vec3 (-2.0, -1.0, -1.0)
                     horizontal      = Vec3 (4.0, 0.0, 0.0)
                     vertical        = Vec3 (0.0, 2.0, 0.0)
                     origin          = Vec3 (0.0, 0.0, 0.0)
                  in Camera origin lowerLeftCorner horizontal vertical
 
-color :: Hittable a => Ray -> [a] -> IO (Vec3 Double)
-color r htbls =
+color :: (RandomGen g, Hittable a) => g -> Ray -> [a] -> Vec3 Double
+color gen r htbls =
   case hitList htbls r 0.001 (read "Infinity" :: Double) of
-    Just h -> do
-      rv <- randomInUnitSphere
-      let target = (hit_p h) + (hit_normal h) + rv
-      c2 <- color (Ray (hit_p h) (target - hit_p h)) htbls
-      return $ scale 0.5 c2
+    Just h ->
+      let (rv, g1) = randomInUnitSphere gen
+          target = hit_p h + hit_normal h + rv
+          c2 = color g1 (Ray (hit_p h) (target - hit_p h)) htbls
+       in scale 0.5 c2
     Nothing ->
       let unitDirection = makeUnitVector (direction r)
           t = 0.5 * (vecY unitDirection + 1.0)
-       in return $
-          scale (1.0 - t) (Vec3 (1.0, 1.0, 1.0)) +
+       in scale (1.0 - t) (Vec3 (1.0, 1.0, 1.0)) +
           scale t (Vec3 (0.5, 0.7, 1.0))
+
+sampleColor ::
+     RandomGen rg => (Int, Int) -> (Vec3 Double, rg) -> Int -> (Vec3 Double, rg)
+sampleColor (x, y) (accCol, gen) _ =
+  let (ru, g1) = random gen
+      (rv, g2) = random g1
+      u = (fromIntegral x + ru) / fromIntegral nx
+      v = (fromIntegral y + rv) / fromIntegral ny
+      r = getRay defaultCamera u v
+      (g3, g4) = split g2
+      c1 = color g3 r world
+   in (accCol + c1, g4)
+
+renderPos :: RandomGen rg => (rg, [RGB]) -> (Int, Int) -> (rg, [RGB])
+renderPos (gen, ps) (x, y) =
+  let (summedColor, g1) =
+        foldr
+          (flip $ sampleColor (x, y))
+          (Vec3 (0.0, 0.0, 0.0), gen)
+          [0 .. ns - 1]
+   in (g1, scaleColors (divide summedColor (fromIntegral ns)) : ps)
+
+renderRow :: RandomGen rg => (rg, [[RGB]]) -> [(Int, Int)] -> (rg, [[RGB]])
+renderRow (gen, rs) ps =
+  let (g1, r) = foldr (flip renderPos) (gen, []) ps
+   in (g1, r : rs)
 
 pixelPositions :: Int -> Int -> [[(Int, Int)]]
 pixelPositions nx ny = map (\y -> map (, y) [0 .. nx - 1]) [ny - 1,ny - 2 .. 0]
 
 someFunc :: IO ()
 someFunc = do
-  let nx = 200
-  let ny = 100
-  let ns = 100
   putStrLn "P3"
   putStrLn $ show nx ++ " " ++ show ny
   putStrLn "255"
-  let world =
-        [ Sphere (Vec3 (0.0, 0.0, (-1.0))) 0.5
-        , Sphere (Vec3 (0.0, (-100.5), (-1.0))) 100
-        ]
   let cam = defaultCamera
   let pp = pixelPositions nx ny
-  let sampleColor :: (Int, Int) -> Vec3 Double -> Int -> IO (Vec3 Double)
-      sampleColor (x, y) accCol _ = do
-        ru <- cRandomDoubleIO
-        rv <- cRandomDoubleIO
-        let u = (fromIntegral x + ru) / fromIntegral nx
-        let v = (fromIntegral y + rv) / fromIntegral ny
-        let r = getRay cam u v
-        c1 <- color r world
-        return $ accCol + c1
-  let renderPos :: (Int, Int) -> IO RGB
-      renderPos (x, y) = do
-        summedColor <-
-          foldrM
-            (flip $ sampleColor (x, y))
-            (Vec3 (0.0, 0.0, 0.0))
-            [0 .. ns - 1]
-        return $ scaleColors $ divide summedColor (fromIntegral ns)
-  vals <- mapM (mapM renderPos) pp
+  gen <- getStdGen
+  let (_, vals) = foldl' renderRow (gen, []) pp
   mapM_ printRow vals
