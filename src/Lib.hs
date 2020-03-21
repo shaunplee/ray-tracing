@@ -5,11 +5,12 @@ module Lib
     ( someFunc
     ) where
 
-import           Control.Monad.State.Strict (State (..), evalState, get, put,
-                                             runState)
-import           Data.Foldable              (foldl')
-import           Data.Word                  (Word8)
-import           System.Random
+import           Control.Monad                 (foldM)
+import           Control.Monad.State.Strict    (State (..), evalState, get, put,
+                                                runState)
+import           Data.Foldable                 (foldl')
+import           Data.Word                     (Word8)
+import           System.Random.Mersenne.Pure64
 
 -- Number of samples to use when anti-aliasing
 ns :: Int
@@ -25,7 +26,7 @@ world :: [Shape]
 world =
   [Sphere (Vec3 (0.0, 0.0, -1.0)) 0.5, Sphere (Vec3 (0.0, -100.5, -1.0)) 100]
 
-type RandomState = State StdGen
+type RandomState = State PureMT
 
 type RGB = Vec3 Word8
 
@@ -178,11 +179,11 @@ hitSphere center radius ray =
      then (-1.0)
      else ((-b) - sqrt discriminant) / (2.0 * a)
 
-randomInUnitSphere :: RandomGen g => g -> (Vec3 Double, g)
+randomInUnitSphere :: PureMT -> (Vec3 Double, PureMT)
 randomInUnitSphere gen =
-  let (x, g1) = random gen
-      (y, g2) = random g1
-      (z, g3) = random g2
+  let (x, g1) = randomDouble gen
+      (y, g2) = randomDouble g1
+      (z, g3) = randomDouble g2
       p = scale 2.0 (Vec3 (x, y, z)) - Vec3 (1.0, 1.0, 1.0)
    in if squaredLength p < 1.0
         then (p, g3)
@@ -209,40 +210,44 @@ defaultCamera = let lowerLeftCorner = Vec3 (-2.0, -1.0, -1.0)
                     origin          = Vec3 (0.0, 0.0, 0.0)
                  in Camera origin lowerLeftCorner horizontal vertical
 
-color :: (RandomGen g, Hittable a) => g -> Ray -> [a] -> Vec3 Double
-color gen r htbls =
+color :: (Hittable a) => Ray -> [a] -> RandomState (Vec3 Double)
+color r htbls =
   case hitList htbls r 0.001 (read "Infinity" :: Double) of
-    Just h ->
+    Just h -> do
+      gen <- get
       let (rv, g1) = randomInUnitSphere gen
-          target = hit_p h + hit_normal h + rv
-          c2 = color g1 (Ray (hit_p h) (target - hit_p h)) htbls
-       in scale 0.5 c2
+      let target = hit_p h + hit_normal h + rv
+      put g1
+      c2 <- color (Ray (hit_p h) (target - hit_p h)) htbls
+      put g1
+      return $ (scale 0.5) c2
     Nothing ->
       let unitDirection = makeUnitVector (direction r)
           t = 0.5 * (vecY unitDirection + 1.0)
-       in scale (1.0 - t) (Vec3 (1.0, 1.0, 1.0)) +
+       in return $
+          scale (1.0 - t) (Vec3 (1.0, 1.0, 1.0)) +
           scale t (Vec3 (0.5, 0.7, 1.0))
 
 sampleColor ::
-     RandomGen rg => (Int, Int) -> (Vec3 Double, rg) -> Int -> (Vec3 Double, rg)
-sampleColor (x, y) (accCol, gen) _ =
-  let (ru, g1) = random gen
-      (rv, g2) = random g1
-      u = (fromIntegral x + ru) / fromIntegral nx
-      v = (fromIntegral y + rv) / fromIntegral ny
-      r = getRay defaultCamera u v
-      (g3, g4) = split g2
-      c1 = color g3 r world
-   in (accCol + c1, g4)
+     (Int, Int) -> Vec3 Double -> Int -> RandomState (Vec3 Double)
+sampleColor (x, y) accCol _ = do
+  gen <- get
+  let (ru, g1) = randomDouble gen
+  let (rv, g2) = randomDouble g1
+  let u = (fromIntegral x + ru) / fromIntegral nx
+  let v = (fromIntegral y + rv) / fromIntegral ny
+  let r = getRay defaultCamera u v
+  put g2
+  c1 <- color r world
+  return $ accCol + c1
 
 renderPos :: (Int, Int) -> RandomState RGB
 renderPos (x, y) = do
   gen <- get
   let (summedColor, g1) =
-        foldr
-          (flip $ sampleColor (x, y))
-          (Vec3 (0.0, 0.0, 0.0), gen)
-          [0 .. ns - 1]
+        runState
+          (foldM (sampleColor (x, y)) (Vec3 (0.0, 0.0, 0.0)) [0 .. ns - 1])
+          gen
   put g1
   return $ scaleColors (divide summedColor (fromIntegral ns))
 
@@ -263,6 +268,6 @@ someFunc = do
   putStrLn "255"
   let cam = defaultCamera
   let pp = pixelPositions nx ny
-  gen <- getStdGen
+  gen <- newPureMT
   let vals = evalState (mapM renderRow pp) gen
   mapM_ printRow vals
