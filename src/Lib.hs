@@ -18,19 +18,24 @@ ns = 100
 
 -- X and Y dimensions of output image
 nx :: Int
-nx = 200
+nx = 400
 ny :: Int
-ny = 100
+ny = 200
 
 world :: [Shape]
 world =
-  [Sphere (Vec3 (0.0, 0.0, -1.0)) 0.5, Sphere (Vec3 (0.0, -100.5, -1.0)) 100]
+  [ Sphere (Vec3 (0.0, 0.0, -1.0)) 0.5 (Lambertian (Vec3 (0.8, 0.3, 0.3)))
+  , Sphere (Vec3 (0.0, -100.5, -1.0)) 100 (Lambertian (Vec3 (0.8, 0.8, 0.0)))
+  , Sphere (Vec3 (1.0, 0.0, -1.0)) 0.5 (Metal (Vec3 (0.8, 0.6, 0.2)) 1.0)
+  , Sphere (Vec3 (-1.0, 0.0, -1.0)) 0.5 (Metal (Vec3 (0.8, 0.8, 0.8)) 0.3)]
 
 type RandomState = State PureMT
 
 type RGB = Vec3 Word8
 
 type XYZ = Vec3 Double
+
+type Attenuation = Vec3 Double
 
 newtype Vec3 a = Vec3 (a, a, a)
 
@@ -120,18 +125,40 @@ data Ray = Ray
   } deriving Show
 
 data Hit = Hit
-  { hit_t      :: Double
-  , hit_p      :: XYZ
-  , hit_normal :: XYZ
+  { hit_t        :: Double
+  , hit_p        :: XYZ
+  , hit_normal   :: XYZ
+  , hit_material :: Material
   }
 
 class Hittable b where
   hit :: b -> Ray -> Double -> Double -> Maybe Hit
 
+data Material
+  = Lambertian Attenuation
+  | Metal Attenuation Double
+
 data Shape = Sphere
-  { sphere_center :: Vec3 Double
-  , sphere_radius :: Double
+  { sphere_center   :: Vec3 Double
+  , sphere_radius   :: Double
+  , sphere_material :: Material
   }
+
+scatter :: Material -> Ray -> Hit -> RandomState (Maybe (Ray, Attenuation))
+scatter (Lambertian att) rin hit_rec = do
+  rUnit <- randomInUnitSphereM
+  let target = hit_p hit_rec + hit_normal hit_rec + rUnit
+  return $ Just (Ray (hit_p hit_rec) (target - hit_p hit_rec), att)
+scatter (Metal att fuzz) rin hit_rec = do
+  rUnit <- randomInUnitSphereM
+  let reflected = reflect (makeUnitVector (direction rin)) (hit_normal hit_rec)
+  let scattered = Ray (hit_p hit_rec) (reflected + scale fuzz rUnit)
+  return $ if dot (direction scattered) (hit_normal hit_rec) > 0.0
+           then Just (scattered, att)
+           else Nothing
+
+reflect :: XYZ -> XYZ -> XYZ
+reflect v n = v - scale (2.0 * dot v n) n
 
 instance Hittable Shape where
   hit sphere r t_min t_max =
@@ -151,7 +178,7 @@ instance Hittable Shape where
       recHit temp =
         let p = pointAtParameter r temp
             n = divide (p - sphere_center sphere) (sphere_radius sphere)
-         in Hit temp p n
+         in Hit temp p n (sphere_material sphere)
 
 hitList :: Hittable a => [a] -> Ray -> Double -> Double -> Maybe Hit
 hitList htbls r t_min t_max =
@@ -178,6 +205,13 @@ hitSphere center radius ray =
   in if discriminant < 0.0
      then (-1.0)
      else ((-b) - sqrt discriminant) / (2.0 * a)
+
+randomInUnitSphereM :: RandomState (Vec3 Double)
+randomInUnitSphereM = do
+  gen <- get
+  let (rUnit, gen1) = randomInUnitSphere gen
+  put gen1
+  return rUnit
 
 randomInUnitSphere :: PureMT -> (Vec3 Double, PureMT)
 randomInUnitSphere gen =
@@ -210,23 +244,35 @@ defaultCamera = let lowerLeftCorner = Vec3 (-2.0, -1.0, -1.0)
                     origin          = Vec3 (0.0, 0.0, 0.0)
                  in Camera origin lowerLeftCorner horizontal vertical
 
-color :: (Hittable a) => Ray -> [a] -> RandomState (Vec3 Double)
-color r htbls =
-  case hitList htbls r 0.001 (read "Infinity" :: Double) of
-    Just h -> do
-      gen <- get
-      let (rv, g1) = randomInUnitSphere gen
-      let target = hit_p h + hit_normal h + rv
-      put g1
-      c2 <- color (Ray (hit_p h) (target - hit_p h)) htbls
-      put g1
-      return $ (scale 0.5) c2
-    Nothing ->
-      let unitDirection = makeUnitVector (direction r)
-          t = 0.5 * (vecY unitDirection + 1.0)
-       in return $
-          scale (1.0 - t) (Vec3 (1.0, 1.0, 1.0)) +
-          scale t (Vec3 (0.5, 0.7, 1.0))
+color :: (Hittable a) => Ray -> [a] -> Int -> RandomState (Vec3 Double)
+color r htbls depth = colorHelp r htbls depth (Vec3 (1.0, 1.0, 1.0))
+  where
+    colorHelp ::
+         (Hittable a)
+      => Ray
+      -> [a]
+      -> Int
+      -> Attenuation
+      -> RandomState (Vec3 Double)
+    colorHelp r htbls depth att_acc =
+      case hitList htbls r 0.001 (read "Infinity" :: Double) of
+        Just h -> do
+          gen <- get
+          if depth < 50
+            then do
+              mscatter <- scatter (hit_material h) r h
+              case mscatter of
+                Just (sray, att) ->
+                  colorHelp sray htbls (depth + 1) (att_acc * att)
+                Nothing -> return $ Vec3 (0.0, 0.0, 0.0)
+            else return (Vec3 (0.0, 0.0, 0.0))
+        Nothing ->
+          let unitDirection = makeUnitVector (direction r)
+              t = 0.5 * (vecY unitDirection + 1.0)
+           in return $
+              att_acc *
+              (scale (1.0 - t) (Vec3 (1.0, 1.0, 1.0)) +
+               scale t (Vec3 (0.5, 0.7, 1.0)))
 
 sampleColor ::
      (Int, Int) -> Vec3 Double -> Int -> RandomState (Vec3 Double)
@@ -238,7 +284,7 @@ sampleColor (x, y) accCol _ = do
   let v = (fromIntegral y + rv) / fromIntegral ny
   let r = getRay defaultCamera u v
   put g2
-  c1 <- color r world
+  c1 <- color r world 0
   return $ accCol + c1
 
 renderPos :: (Int, Int) -> RandomState RGB
