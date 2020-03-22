@@ -1,5 +1,6 @@
 {-# LANGUAGE MultiWayIf    #-}
 {-# LANGUAGE TupleSections #-}
+{-# LANGUAGE TypeFamilies  #-}
 
 module Lib
     ( someFunc
@@ -9,6 +10,8 @@ import           Control.Monad                 (foldM)
 import           Control.Monad.State.Strict    (State (..), evalState, get, put,
                                                 runState)
 import           Data.Foldable                 (foldl')
+import           Data.Vector                   (Vector, fromList)
+import qualified Data.Vector                   as V
 import           Data.Word                     (Word8)
 import           System.Random.Mersenne.Pure64
 
@@ -112,12 +115,11 @@ scaleColor x = floor (255.99 * sqrt x)
 scaleColors :: Vec3 Double -> RGB
 scaleColors = fmap scaleColor
 
-printRow :: [RGB] -> IO ()
+printRow :: Vector RGB -> IO ()
 printRow row = putStrLn $ showRow row
 
-showRow :: [RGB] -> String
-showRow row = unwords $ fmap show row
-
+showRow :: Vector RGB -> String
+showRow row = unwords $ V.toList $ fmap show row
 
 data Ray = Ray
   { origin    :: XYZ
@@ -292,20 +294,20 @@ renderPos (x, y) = do
   gen <- get
   let (summedColor, g1) =
         runState
-          (foldM (sampleColor (x, y)) (Vec3 (0.0, 0.0, 0.0)) [0 .. ns - 1])
+          (foldM (sampleColor (x, y)) (Vec3 (0.0, 0.0, 0.0)) (V.replicate ns 0))
           gen
   put g1
   return $ scaleColors (divide summedColor (fromIntegral ns))
 
-renderRow :: [(Int, Int)] -> RandomState [RGB]
+renderRow :: Vector (Int, Int) -> RandomState (Vector RGB)
 renderRow ps = do
   gen <- get
-  let (r, g1) = runState (mapM renderPos ps) gen
+  let (r, g1) = runState (V.mapM renderPos ps) gen
   put g1
   return r
 
-pixelPositions :: Int -> Int -> [[(Int, Int)]]
-pixelPositions nx ny = map (\y -> map (, y) [0 .. nx - 1]) [ny - 1,ny - 2 .. 0]
+pixelPositions :: Int -> Int -> Vector (Vector (Int, Int))
+pixelPositions nx ny = V.generate ny (\y -> V.generate nx (, y))
 
 someFunc :: IO ()
 someFunc = do
@@ -315,5 +317,5 @@ someFunc = do
   let cam = defaultCamera
   let pp = pixelPositions nx ny
   gen <- newPureMT
-  let vals = evalState (mapM renderRow pp) gen
+  let vals = evalState (V.mapM renderRow pp) gen
   mapM_ printRow vals
