@@ -168,8 +168,9 @@ instance Hittable Shape where
         c = dot oc oc - (sphere_radius sphere * sphere_radius sphere)
         discriminant = b * b - a * c
      in if discriminant > 0
-          then let temp1 = ((-b) - sqrt discriminant) / a
-                   temp2 = ((-b) + sqrt discriminant) / a
+          then let sd = sqrt discriminant
+                   temp1 = ((-b) - sd) / a
+                   temp2 = ((-b) + sd) / a
                 in if | temp1 < t_max && temp1 > t_min -> Just $ recHit temp1
                       | temp2 < t_max && temp2 > t_min -> Just $ recHit temp2
                       | otherwise -> Nothing
@@ -205,6 +206,13 @@ hitSphere center radius ray =
   in if discriminant < 0.0
      then (-1.0)
      else ((-b) - sqrt discriminant) / (2.0 * a)
+
+randomDoubleM :: RandomState Double
+randomDoubleM = do
+  g1 <- get
+  let (x, g2) = randomDouble g1
+  put g2
+  return x
 
 randomInUnitSphereM :: RandomState (Vec3 Double)
 randomInUnitSphereM = do
