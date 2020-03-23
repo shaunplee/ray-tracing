@@ -24,10 +24,11 @@ ny = 200
 
 world :: [Shape]
 world =
-  [ Sphere (Vec3 (0.0, 0.0, -1.0)) 0.5 (Lambertian (Vec3 (0.8, 0.3, 0.3)))
+  [ Sphere (Vec3 (0.0, 0.0, -1.0)) 0.5 (Lambertian (Vec3 (0.1, 0.2, 0.5)))
   , Sphere (Vec3 (0.0, -100.5, -1.0)) 100 (Lambertian (Vec3 (0.8, 0.8, 0.0)))
-  , Sphere (Vec3 (1.0, 0.0, -1.0)) 0.5 (Metal (Vec3 (0.8, 0.6, 0.2)) 1.0)
-  , Sphere (Vec3 (-1.0, 0.0, -1.0)) 0.5 (Metal (Vec3 (0.8, 0.8, 0.8)) 0.3)]
+  , Sphere (Vec3 (1.0, 0.0, -1.0)) 0.5 (Metal (Vec3 (0.8, 0.6, 0.2)) 0.3)
+  , Sphere (Vec3 (-1.0, 0.0, -1.0)) 0.5 (Dielectric 1.5)
+  , Sphere (Vec3 (-1.0, 0.0, -1.0)) (-0.45) (Dielectric 1.5)]
 
 type RandomState = State PureMT
 
@@ -137,6 +138,7 @@ class Hittable b where
 data Material
   = Lambertian Attenuation
   | Metal Attenuation Double
+  | Dielectric Double
 
 data Shape = Sphere
   { sphere_center   :: Vec3 Double
@@ -156,9 +158,44 @@ scatter (Metal att fuzz) rin hit_rec = do
   return $ if dot (direction scattered) (hit_normal hit_rec) > 0.0
            then Just (scattered, att)
            else Nothing
+scatter (Dielectric ref_idx) rin hit_rec = do
+  let reflected = reflect (direction rin) (hit_normal hit_rec)
+  let attenuation = Vec3 (1.0, 1.0, 1.0)
+  let (outward_normal, nint, cos) =
+        if dot (direction rin) (hit_normal hit_rec) > 0.0
+          then ( negate (hit_normal hit_rec)
+               , ref_idx
+               , ref_idx * dot (direction rin) (hit_normal hit_rec) /
+                 Lib.length (direction rin))
+          else ( hit_normal hit_rec
+               , 1.0 / ref_idx
+               , -dot (direction rin) (hit_normal hit_rec) /
+                 Lib.length (direction rin))
+  rd <- randomDoubleM
+  case refract (direction rin) outward_normal nint of
+    Just refracted -> if rd > schlick cos ref_idx
+      then return $ Just (Ray (hit_p hit_rec) refracted, attenuation)
+      else return $ Just (Ray (hit_p hit_rec) reflected, attenuation)
+    Nothing -> return $ Just (Ray (hit_p hit_rec) reflected, attenuation)
 
 reflect :: XYZ -> XYZ -> XYZ
 reflect v n = v - scale (2.0 * dot v n) n
+
+refract :: XYZ -> XYZ -> Double -> Maybe XYZ
+refract v n nint =
+  let uv = makeUnitVector v
+      dt = dot uv n
+      discriminant = 1.0 - nint * nint * (1 - dt * dt)
+   in if discriminant > 0
+      then Just $ scale nint (uv - scale dt n) - scale (sqrt discriminant) n
+      else Nothing
+
+-- Christopher Schlick approximation for reflectivity of glass based on angle
+schlick :: Double -> Double -> Double
+schlick cos ref_idx =
+  let r0 = (1.0 - ref_idx) / (1.0 + ref_idx)
+      r1 = r0 * r0
+   in r1 + (1.0 - r1) * (1 - cos) ** 5
 
 instance Hittable Shape where
   hit sphere r t_min t_max =
