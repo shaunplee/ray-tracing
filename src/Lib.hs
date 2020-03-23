@@ -272,41 +272,55 @@ randomInUnitSphere gen =
         else randomInUnitSphere g3
 
 data Camera = Camera
-  { camera_origin :: XYZ
-  , camera_llc    :: XYZ
-  , camera_horiz  :: XYZ
-  , camera_vert   :: XYZ
+  { camera_origin     :: XYZ
+  , camera_llc        :: XYZ
+  , camera_horiz      :: XYZ
+  , camera_vert       :: XYZ
+  , camera_u          :: XYZ
+  , camera_v          :: XYZ
+  , camera_w          :: XYZ
+  , camera_lensRadius :: Double
   }
 
-getRay :: Camera -> Double -> Double -> Ray
-getRay c u v =
-  Ray
-    (camera_origin c)
-    (camera_llc c + scale u (camera_horiz c) + scale v (camera_vert c) -
-     camera_origin c)
+getRay :: Camera -> Double -> Double -> RandomState Ray
+getRay c u v = do
+  rd <- fmap (scale (camera_lensRadius c)) randomInUnitSphereM
+  let offset = scale (vecX rd) (camera_u c) + scale (vecY rd) (camera_v c)
+  return $
+    Ray
+      (offset + camera_origin c)
+      (camera_llc c + scale u (camera_horiz c) + scale v (camera_vert c) -
+       offset -
+       camera_origin c)
 
 defaultCamera :: Camera
 defaultCamera =
   newCamera
-    (Vec3 (-2.0, 2.0, 1.0))
+    (Vec3 (3.0, 3.0, 2.0))
     (Vec3 (0.0, 0.0, -1.0))
     (Vec3 (0.0, 1.0, 0.0))
-    30.0
+    20.0
     (fromIntegral nx / fromIntegral ny)
+    2.0
 
-newCamera :: XYZ -> XYZ -> XYZ -> Double -> Double -> Camera
-newCamera lookfrom lookat vup vfov aspect =
-  let theta = vfov * pi / 180.0
+newCamera :: XYZ -> XYZ -> XYZ -> Double -> Double -> Double ->  Camera
+newCamera lookfrom lookat vup vfov aspect aperture =
+  let lensRadius = aperture / 2.0
+      theta = vfov * pi / 180.0
       halfHeight = tan (theta / 2.0)
       halfWidth = aspect * halfHeight
       origin = lookfrom
+      focusDist = Lib.length (lookfrom - lookat)
       w = makeUnitVector (lookfrom - lookat)
       u = makeUnitVector (cross vup w)
       v = cross w u
-      lowerLeftCorner = origin - scale halfWidth u - scale halfHeight v - w
-      horizontal = scale (2 * halfWidth) u
-      vertical = scale (2 * halfHeight) v
-   in Camera origin lowerLeftCorner horizontal vertical
+      lowerLeftCorner =
+        origin - scale (halfWidth * focusDist) u -
+        scale (halfHeight * focusDist) v -
+        scale focusDist w
+      horizontal = scale (2 * halfWidth * focusDist) u
+      vertical = scale (2 * halfHeight * focusDist) v
+   in Camera origin lowerLeftCorner horizontal vertical u v w lensRadius
 
 color :: (Hittable a) => Ray -> [a] -> Int -> RandomState (Vec3 Double)
 color r htbls depth = colorHelp r htbls depth (Vec3 (1.0, 1.0, 1.0))
@@ -346,7 +360,7 @@ sampleColor (x, y) accCol _ = do
   let (rv, g2) = randomDouble g1
   let u = (fromIntegral x + ru) / fromIntegral nx
   let v = (fromIntegral y + rv) / fromIntegral ny
-  let r = getRay defaultCamera u v
+  r <- getRay defaultCamera u v
   put g2
   c1 <- color r world 0
   return $ accCol + c1
