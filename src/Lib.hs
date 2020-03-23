@@ -22,6 +22,9 @@ nx = 400
 ny :: Int
 ny = 200
 
+rWorld :: Double
+rWorld = cos (pi / 4.0)
+
 world :: [Shape]
 world =
   [ Sphere (Vec3 (0.0, 0.0, -1.0)) 0.5 (Lambertian (Vec3 (0.1, 0.2, 0.5)))
@@ -283,11 +286,27 @@ getRay c u v =
      camera_origin c)
 
 defaultCamera :: Camera
-defaultCamera = let lowerLeftCorner = Vec3 (-2.0, -1.0, -1.0)
-                    horizontal      = Vec3 (4.0, 0.0, 0.0)
-                    vertical        = Vec3 (0.0, 2.0, 0.0)
-                    origin          = Vec3 (0.0, 0.0, 0.0)
-                 in Camera origin lowerLeftCorner horizontal vertical
+defaultCamera =
+  newCamera
+    (Vec3 (-2.0, 2.0, 1.0))
+    (Vec3 (0.0, 0.0, -1.0))
+    (Vec3 (0.0, 1.0, 0.0))
+    30.0
+    (fromIntegral nx / fromIntegral ny)
+
+newCamera :: XYZ -> XYZ -> XYZ -> Double -> Double -> Camera
+newCamera lookfrom lookat vup vfov aspect =
+  let theta = vfov * pi / 180.0
+      halfHeight = tan (theta / 2.0)
+      halfWidth = aspect * halfHeight
+      origin = lookfrom
+      w = makeUnitVector (lookfrom - lookat)
+      u = makeUnitVector (cross vup w)
+      v = cross w u
+      lowerLeftCorner = origin - scale halfWidth u - scale halfHeight v - w
+      horizontal = scale (2 * halfWidth) u
+      vertical = scale (2 * halfHeight) v
+   in Camera origin lowerLeftCorner horizontal vertical
 
 color :: (Hittable a) => Ray -> [a] -> Int -> RandomState (Vec3 Double)
 color r htbls depth = colorHelp r htbls depth (Vec3 (1.0, 1.0, 1.0))
@@ -357,7 +376,6 @@ someFunc = do
   putStrLn "P3"
   putStrLn $ show nx ++ " " ++ show ny
   putStrLn "255"
-  let cam = defaultCamera
   let pp = pixelPositions nx ny
   gen <- newPureMT
   let vals = evalState (mapM renderRow pp) gen
