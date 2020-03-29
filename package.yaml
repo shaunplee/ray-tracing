@@ -26,7 +26,7 @@ library:
   source-dirs: src
   dependencies:
     - mtl
-    - mersenne-random-pure64
+    - mwc-random
 
 executables:
   ray-tracing-exe:

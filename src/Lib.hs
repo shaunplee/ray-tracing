@@ -5,13 +5,12 @@ module Lib
     ( someFunc
     ) where
 
-import           Control.Monad                 (foldM)
-import           Control.Monad.State.Strict    (State (..), evalState, get, put,
-                                                runState)
-import           Data.Foldable                 (foldl')
-import           Data.Word                     (Word8)
-import           System.IO                     (hPutStr, stderr)
-import           System.Random.Mersenne.Pure64
+import           Control.Monad     (foldM)
+import           Control.Monad.ST
+import           Data.Foldable     (foldl')
+import           Data.Word         (Word8)
+import           System.IO         (hPutStr, stderr)
+import           System.Random.MWC
 
 -- Number of samples to use when anti-aliasing
 ns :: Int
@@ -33,8 +32,6 @@ world =
   , Sphere (Vec3 (1.0, 0.0, -1.0)) 0.5 (Metal (Vec3 (0.8, 0.6, 0.2)) 0.3)
   , Sphere (Vec3 (-1.0, 0.0, -1.0)) 0.5 (Dielectric 1.5)
   , Sphere (Vec3 (-1.0, 0.0, -1.0)) (-0.45) (Dielectric 1.5)]
-
-type RandomState = State PureMT
 
 type RGB = Vec3 Word8
 
@@ -158,19 +155,19 @@ data Shape = Sphere
   , sphere_material :: Material
   }
 
-scatter :: Material -> Ray -> Hit -> RandomState (Maybe (Ray, Attenuation))
-scatter (Lambertian att) rin hit_rec = do
-  rUnit <- randomInUnitSphereM
+scatter :: GenST a -> Material -> Ray -> Hit -> ST a (Maybe (Ray, Attenuation))
+scatter gen (Lambertian att) rin hit_rec = do
+  rUnit <- randomInUnitSphere gen
   let target = hit_p hit_rec + hit_normal hit_rec + rUnit
   return $ Just (Ray (hit_p hit_rec) (target - hit_p hit_rec), att)
-scatter (Metal att fuzz) rin hit_rec = do
-  rUnit <- randomInUnitSphereM
+scatter gen (Metal att fuzz) rin hit_rec = do
+  rUnit <- randomInUnitSphere gen
   let reflected = reflect (makeUnitVector (direction rin)) (hit_normal hit_rec)
   let scattered = Ray (hit_p hit_rec) (reflected + scale fuzz rUnit)
   return $ if dot (direction scattered) (hit_normal hit_rec) > 0.0
            then Just (scattered, att)
            else Nothing
-scatter (Dielectric ref_idx) rin hit_rec = do
+scatter gen (Dielectric ref_idx) rin hit_rec = do
   let reflected = reflect (direction rin) (hit_normal hit_rec)
   let attenuation = Vec3 (1.0, 1.0, 1.0)
   let (outward_normal, nint, cos) =
@@ -183,7 +180,7 @@ scatter (Dielectric ref_idx) rin hit_rec = do
                , 1.0 / ref_idx
                , -dot (direction rin) (hit_normal hit_rec) /
                  Lib.length (direction rin))
-  rd <- randomDoubleM
+  rd <- randomDouble gen
   case refract (direction rin) outward_normal nint of
     Just refracted -> if rd > schlick cos ref_idx
       then return $ Just (Ray (hit_p hit_rec) refracted, attenuation)
@@ -258,29 +255,27 @@ hitSphere center radius ray =
      -- there's a hit
      else ((-b) - sqrt discriminant) / (2.0 * a)
 
-randomDoubleM :: RandomState Double
-randomDoubleM = do
-  g1 <- get
-  let (x, g2) = randomDouble g1
-  put g2
-  return x
+randomDouble :: GenST a -> ST a Double
+randomDouble gen = do
+  d <- uniform gen
+  return (d - 2 ** (-33))
 
-randomInUnitSphereM :: RandomState (Vec3 Double)
-randomInUnitSphereM = do
-  gen <- get
-  let (rUnit, gen1) = randomInUnitSphere gen
-  put gen1
-  return rUnit
+-- randomInUnitSphereM :: ST a (Vec3 Double)
+-- randomInUnitSphereM = do
+--   gen <- get
+--   let (rUnit, gen1) = randomInUnitSphere gen
+--   put gen1
+--   return rUnit
 
-randomInUnitSphere :: PureMT -> (Vec3 Double, PureMT)
-randomInUnitSphere gen =
-  let (x, g1) = randomDouble gen
-      (y, g2) = randomDouble g1
-      (z, g3) = randomDouble g2
-      p = scale 2.0 (Vec3 (x, y, z)) - Vec3 (1.0, 1.0, 1.0)
-   in if squaredLength p < 1.0
-        then (p, g3)
-        else randomInUnitSphere g3
+randomInUnitSphere :: GenST a -> ST a (Vec3 Double)
+randomInUnitSphere gen = do
+   x <- randomDouble gen
+   y <- randomDouble gen
+   z <- randomDouble gen
+   let p = scale 2.0 (Vec3 (x, y, z)) - Vec3 (1.0, 1.0, 1.0)
+   if squaredLength p < 1.0
+        then return p
+        else randomInUnitSphere gen
 
 data Camera = Camera
   { camera_origin     :: XYZ
@@ -293,9 +288,9 @@ data Camera = Camera
   , camera_lensRadius :: Double
   }
 
-getRay :: Camera -> Double -> Double -> RandomState Ray
-getRay c u v = do
-  rd <- fmap (scale (camera_lensRadius c)) randomInUnitSphereM
+getRay :: GenST a -> Camera -> Double -> Double -> ST a Ray
+getRay gen c u v = do
+  rd <- fmap (scale (camera_lensRadius c)) (randomInUnitSphere gen)
   let offset = scale (vecX rd) (camera_u c) + scale (vecY rd) (camera_v c)
   return $
     Ray
@@ -333,26 +328,26 @@ newCamera lookfrom lookat vup vfov aspect aperture =
       vertical = scale (2 * halfHeight * focusDist) v
    in Camera origin lowerLeftCorner horizontal vertical u v w lensRadius
 
-color :: (Hittable a) => Ray -> [a] -> Int -> RandomState (Vec3 Double)
-color r htbls depth = colorHelp r htbls depth (Vec3 (1.0, 1.0, 1.0))
+color :: (Hittable a) => GenST b -> Ray -> [a] -> Int -> ST b (Vec3 Double)
+color gen r htbls depth = colorHelp gen r htbls depth (Vec3 (1.0, 1.0, 1.0))
   where
     colorHelp ::
          (Hittable a)
-      => Ray
+      => GenST b
+      -> Ray
       -> [a]
       -> Int
       -> Attenuation
-      -> RandomState (Vec3 Double)
-    colorHelp r htbls depth att_acc =
+      -> ST b (Vec3 Double)
+    colorHelp gen r htbls depth att_acc =
       case hitList htbls r 0.001 (read "Infinity" :: Double) of
-        Just h -> do
-          gen <- get
+        Just h ->
           if depth < 50
             then do
-              mscatter <- scatter (hit_material h) r h
+              mscatter <- scatter gen (hit_material h) r h
               case mscatter of
                 Just (sray, att) ->
-                  colorHelp sray htbls (depth + 1) (att_acc * att)
+                  colorHelp gen sray htbls (depth + 1) (att_acc * att)
                 Nothing -> return $ Vec3 (0.0, 0.0, 0.0)
             else return (Vec3 (0.0, 0.0, 0.0))
         Nothing ->
@@ -363,35 +358,24 @@ color r htbls depth = colorHelp r htbls depth (Vec3 (1.0, 1.0, 1.0))
               (scale (1.0 - t) (Vec3 (1.0, 1.0, 1.0)) +
                scale t (Vec3 (0.5, 0.7, 1.0)))
 
-sampleColor ::
-     (Int, Int) -> Vec3 Double -> Int -> RandomState (Vec3 Double)
-sampleColor (x, y) accCol _ = do
-  gen <- get
-  let (ru, g1) = randomDouble gen
-  let (rv, g2) = randomDouble g1
+sampleColor :: GenST a -> (Int, Int) -> Vec3 Double -> Int -> ST a (Vec3 Double)
+sampleColor gen (x, y) accCol _ = do
+  ru <- randomDouble gen
+  rv <- randomDouble gen
   let u = (fromIntegral x + ru) / fromIntegral imageWidth
   let v = (fromIntegral y + rv) / fromIntegral imageHeight
-  r <- getRay defaultCamera u v
-  put g2
-  c1 <- color r world 0
+  r <- getRay gen defaultCamera u v
+  c1 <- color gen r world 0
   return $ accCol + c1
 
-renderPos :: (Int, Int) -> RandomState RGB
-renderPos (x, y) = do
-  gen <- get
-  let (summedColor, g1) =
-        runState
-          (foldM (sampleColor (x, y)) (Vec3 (0.0, 0.0, 0.0)) [0 .. ns - 1])
-          gen
-  put g1
+renderPos :: GenST a -> (Int, Int) -> ST a RGB
+renderPos gen (x, y) = do
+  summedColor <-
+    foldM (sampleColor gen (x, y)) (Vec3 (0.0, 0.0, 0.0)) [0 .. ns - 1]
   return $ scaleColors (divide summedColor (fromIntegral ns))
 
-renderRow :: [(Int, Int)] -> RandomState [RGB]
-renderRow ps = do
-  gen <- get
-  let (r, g1) = runState (mapM renderPos ps) gen
-  put g1
-  return r
+renderRow :: GenST a -> [(Int, Int)] -> ST a [RGB]
+renderRow gen ps = mapM (renderPos gen) ps
 
 pixelPositions :: Int -> Int -> [[(Int, Int)]]
 pixelPositions nx ny = map (\y -> map (, y) [0 .. nx - 1]) [ny - 1,ny - 2 .. 0]
@@ -402,7 +386,7 @@ someFunc = do
   putStrLn $ show imageWidth ++ " " ++ show imageHeight
   putStrLn "255"
   let pp = pixelPositions imageWidth imageHeight
-  gen <- newPureMT
-  let vals = evalState (mapM renderRow pp) gen
+  let vals = runST (do gen <- create
+                       mapM (renderRow gen) pp)
   mapM_ printRow (zip [1 .. imageHeight] vals)
   hPutStr stderr "\nDone.\n"
