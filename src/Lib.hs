@@ -137,8 +137,10 @@ at r t = origin r + scale t (direction r)
 data Hit = Hit
   { hit_t         :: Double
   , hit_p         :: XYZ
-  , hit_normal    :: XYZ
-  , hit_frontFace :: Bool
+  , hit_normal    :: XYZ -- vector normal to the surface of the object
+                         -- at the point of the hit
+  , hit_frontFace :: Bool -- did the ray hit the outer face of the
+                          -- object?
   , hit_material  :: Material
   }
 
@@ -251,7 +253,9 @@ hitSphere center radius ray =
       c = dot oc oc - (radius * radius)
       discriminant = b * b - 4 * a * c
   in if discriminant < 0.0
+     -- no hits
      then (-1.0)
+     -- there's a hit
      else ((-b) - sqrt discriminant) / (2.0 * a)
 
 randomDoubleM :: RandomState Double
