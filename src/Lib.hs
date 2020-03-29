@@ -10,6 +10,7 @@ import           Control.Monad.State.Strict    (State (..), evalState, get, put,
                                                 runState)
 import           Data.Foldable                 (foldl')
 import           Data.Word                     (Word8)
+import           System.IO                     (hPutStr, stderr)
 import           System.Random.Mersenne.Pure64
 
 -- Number of samples to use when anti-aliasing
@@ -116,8 +117,10 @@ scaleColor x = floor (255.99 * sqrt x)
 scaleColors :: Vec3 Double -> RGB
 scaleColors = fmap scaleColor
 
-printRow :: [RGB] -> IO ()
-printRow row = putStrLn $ showRow row
+printRow :: (Int, [RGB]) -> IO ()
+printRow (i, row) = do
+  hPutStr stderr ("\rRendering row " ++ show i ++ " of " ++ show imageHeight)
+  putStrLn $ showRow row
 
 showRow :: [RGB] -> String
 showRow row = unwords $ fmap show row
@@ -394,3 +397,4 @@ someFunc = do
   gen <- newPureMT
   let vals = evalState (mapM renderRow pp) gen
   mapM_ printRow vals
+  hPutStr stderr "\nDone.\n"
