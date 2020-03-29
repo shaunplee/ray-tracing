@@ -5,9 +5,9 @@ module Lib
     ( someFunc
     ) where
 
-import           Control.Monad     (foldM)
+import           Control.Monad     (foldM, foldM_)
 import           Control.Monad.ST
-import           Data.Foldable     (foldl')
+import           Data.Foldable     (foldl', foldr)
 import           Data.Word         (Word8)
 import           System.IO         (hPutStr, stderr)
 import           System.Random.MWC
@@ -375,7 +375,7 @@ renderPos gen (x, y) = do
   return $ scaleColors (divide summedColor (fromIntegral ns))
 
 renderRow :: GenST a -> [(Int, Int)] -> ST a [RGB]
-renderRow gen ps = mapM (renderPos gen) ps
+renderRow gen = mapM (renderPos gen)
 
 pixelPositions :: Int -> Int -> [[(Int, Int)]]
 pixelPositions nx ny = map (\y -> map (, y) [0 .. nx - 1]) [ny - 1,ny - 2 .. 0]
@@ -386,7 +386,18 @@ someFunc = do
   putStrLn $ show imageWidth ++ " " ++ show imageHeight
   putStrLn "255"
   let pp = pixelPositions imageWidth imageHeight
-  let vals = runST (do gen <- create
-                       mapM (renderRow gen) pp)
-  mapM_ printRow (zip [1 .. imageHeight] vals)
+  mapM_
+    (printRow . (\(i, row) -> runST $ do
+          gen <- create
+          renderedRow <- renderRow gen row
+          return (i, renderedRow)))
+    (zip
+       [1 .. imageHeight]
+       pp)
+  -- foldM_
+  --   (\g (rowNum, row) ->
+  --      printRow
+  --        ( rowNum
+  --        , runST $ renderRow g row))
+  --   (zip [1 .. imageHeight] pp)
   hPutStr stderr "\nDone.\n"
