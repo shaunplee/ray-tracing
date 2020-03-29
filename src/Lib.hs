@@ -131,11 +131,15 @@ data Ray = Ray
   , direction :: XYZ
   } deriving Show
 
+at :: Ray -> Double -> XYZ
+at r t = origin r + scale t (direction r)
+
 data Hit = Hit
-  { hit_t        :: Double
-  , hit_p        :: XYZ
-  , hit_normal   :: XYZ
-  , hit_material :: Material
+  { hit_t         :: Double
+  , hit_p         :: XYZ
+  , hit_normal    :: XYZ
+  , hit_frontFace :: Bool
+  , hit_material  :: Material
   }
 
 class Hittable b where
@@ -220,9 +224,12 @@ instance Hittable Shape where
           else Nothing
     where
       recHit temp =
-        let p = pointAtParameter r temp
-            n = divide (p - sphere_center sphere) (sphere_radius sphere)
-         in Hit temp p n (sphere_material sphere)
+        let p = r `at` temp
+            outwardNormal =
+              divide (p - sphere_center sphere) (sphere_radius sphere)
+            frontFace = dot (direction r) outwardNormal < 0.0
+            n = if frontFace then outwardNormal else -outwardNormal
+         in Hit temp p n frontFace (sphere_material sphere)
 
 hitList :: Hittable a => [a] -> Ray -> Double -> Double -> Maybe Hit
 hitList htbls r t_min t_max =
@@ -235,9 +242,6 @@ hitList htbls r t_min t_max =
            h1      -> h1)
     Nothing
     htbls
-
-pointAtParameter :: Ray -> Double -> XYZ
-pointAtParameter r t = origin r + scale t (direction r)
 
 hitSphere :: XYZ -> Double -> Ray -> Double
 hitSphere center radius ray =
