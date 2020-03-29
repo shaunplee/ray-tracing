@@ -18,10 +18,10 @@ ns :: Int
 ns = 100
 
 -- X and Y dimensions of output image
-nx :: Int
-nx = 400
-ny :: Int
-ny = 200
+imageWidth :: Int
+imageWidth = 400
+imageHeight :: Int
+imageHeight = 200
 
 rWorld :: Double
 rWorld = cos (pi / 4.0)
@@ -303,7 +303,7 @@ defaultCamera =
     (Vec3 (0.0, 0.0, -1.0))
     (Vec3 (0.0, 1.0, 0.0))
     20.0
-    (fromIntegral nx / fromIntegral ny)
+    (fromIntegral imageWidth / fromIntegral imageHeight)
     2.0
 
 newCamera :: XYZ -> XYZ -> XYZ -> Double -> Double -> Double ->  Camera
@@ -361,8 +361,8 @@ sampleColor (x, y) accCol _ = do
   gen <- get
   let (ru, g1) = randomDouble gen
   let (rv, g2) = randomDouble g1
-  let u = (fromIntegral x + ru) / fromIntegral nx
-  let v = (fromIntegral y + rv) / fromIntegral ny
+  let u = (fromIntegral x + ru) / fromIntegral imageWidth
+  let v = (fromIntegral y + rv) / fromIntegral imageHeight
   r <- getRay defaultCamera u v
   put g2
   c1 <- color r world 0
@@ -391,10 +391,10 @@ pixelPositions nx ny = map (\y -> map (, y) [0 .. nx - 1]) [ny - 1,ny - 2 .. 0]
 someFunc :: IO ()
 someFunc = do
   putStrLn "P3"
-  putStrLn $ show nx ++ " " ++ show ny
+  putStrLn $ show imageWidth ++ " " ++ show imageHeight
   putStrLn "255"
-  let pp = pixelPositions nx ny
+  let pp = pixelPositions imageWidth imageHeight
   gen <- newPureMT
   let vals = evalState (mapM renderRow pp) gen
-  mapM_ printRow vals
+  mapM_ printRow (zip [1 .. imageHeight] vals)
   hPutStr stderr "\nDone.\n"
