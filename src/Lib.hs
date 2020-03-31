@@ -17,11 +17,15 @@ import           System.Random.Mersenne.Pure64
 ns :: Int
 ns = 100
 
+-- maximum number of reflections
+maxDepth = 50
+
 -- X and Y dimensions of output image
 imageWidth :: Int
 imageWidth = 400
 imageHeight :: Int
 imageHeight = 200
+
 
 rWorld :: Double
 rWorld = cos (pi / 4.0)
@@ -160,11 +164,11 @@ data Shape = Sphere
 
 scatter :: Material -> Ray -> Hit -> RandomState (Maybe (Ray, Attenuation))
 scatter (Lambertian att) rin hit_rec = do
-  rUnit <- randomInUnitSphereM
+  rUnit <- randomUnitVectorM
   let target = hit_p hit_rec + hit_normal hit_rec + rUnit
   return $ Just (Ray (hit_p hit_rec) (target - hit_p hit_rec), att)
 scatter (Metal att fuzz) rin hit_rec = do
-  rUnit <- randomInUnitSphereM
+  rUnit <- randomUnitVectorM
   let reflected = reflect (makeUnitVector (direction rin)) (hit_normal hit_rec)
   let scattered = Ray (hit_p hit_rec) (reflected + scale fuzz rUnit)
   return $ if dot (direction scattered) (hit_normal hit_rec) > 0.0
@@ -282,6 +286,24 @@ randomInUnitSphere gen =
         then (p, g3)
         else randomInUnitSphere g3
 
+randomUnitVectorM :: RandomState (Vec3 Double)
+randomUnitVectorM = do
+  gen <- get
+  let (aa, g1) = randomDouble gen
+  let a = aa * 2 * pi
+  let (zz, g2) = randomDouble g1
+  let z = (zz * 2) - 1
+  let r = sqrt (1 - z * z)
+  put g2
+  return $ Vec3 (r * cos a, r * sin a, z)
+
+randomInHemisphereM :: XYZ -> RandomState (Vec3 Double)
+randomInHemisphereM n = do
+  inUnitSphere <- randomInUnitSphereM
+  if (inUnitSphere `dot` n) > 0.0
+    then return inUnitSphere
+    else return (-inUnitSphere)
+
 data Camera = Camera
   { camera_origin     :: XYZ
   , camera_llc        :: XYZ
@@ -333,26 +355,26 @@ newCamera lookfrom lookat vup vfov aspect aperture =
       vertical = scale (2 * halfHeight * focusDist) v
    in Camera origin lowerLeftCorner horizontal vertical u v w lensRadius
 
-color :: (Hittable a) => Ray -> [a] -> Int -> RandomState (Vec3 Double)
-color r htbls depth = colorHelp r htbls depth (Vec3 (1.0, 1.0, 1.0))
+rayColor :: (Hittable a) => Ray -> [a] -> Int -> RandomState (Vec3 Double)
+rayColor r htbls depth = rayColorHelp r htbls depth (Vec3 (1.0, 1.0, 1.0))
   where
-    colorHelp ::
+    rayColorHelp ::
          (Hittable a)
       => Ray
       -> [a]
       -> Int
       -> Attenuation
       -> RandomState (Vec3 Double)
-    colorHelp r htbls depth att_acc =
+    rayColorHelp r htbls depth att_acc =
       case hitList htbls r 0.001 (read "Infinity" :: Double) of
         Just h -> do
           gen <- get
-          if depth < 50
+          if depth > 0
             then do
               mscatter <- scatter (hit_material h) r h
               case mscatter of
                 Just (sray, att) ->
-                  colorHelp sray htbls (depth + 1) (att_acc * att)
+                  rayColorHelp sray htbls (depth - 1) (att_acc * att)
                 Nothing -> return $ Vec3 (0.0, 0.0, 0.0)
             else return (Vec3 (0.0, 0.0, 0.0))
         Nothing ->
@@ -373,7 +395,7 @@ sampleColor (x, y) accCol _ = do
   let v = (fromIntegral y + rv) / fromIntegral imageHeight
   r <- getRay defaultCamera u v
   put g2
-  c1 <- color r world 0
+  c1 <- rayColor r world maxDepth
   return $ accCol + c1
 
 renderPos :: (Int, Int) -> RandomState RGB
