@@ -1,5 +1,6 @@
-{-# LANGUAGE MultiWayIf    #-}
-{-# LANGUAGE TupleSections #-}
+{-# LANGUAGE MultiWayIf        #-}
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TupleSections     #-}
 
 module Lib
     ( someFunc
@@ -8,6 +9,8 @@ module Lib
 import           Control.Monad                 (foldM)
 import           Control.Monad.State.Strict    (State (..), evalState, get, put,
                                                 runState)
+import qualified Data.ByteString               as BS
+import qualified Data.ByteString.Char8         as BSC
 import           Data.Foldable                 (foldl')
 import           Data.Word                     (Word8)
 import           System.IO                     (hPutStr, stderr)
@@ -62,6 +65,10 @@ instance Functor Vec3 where
 
 instance Show a => Show (Vec3 a) where
   show (Vec3 (x, y, z)) = show x ++ " " ++ show y ++ " " ++ show z
+
+showBS :: RGB -> BSC.ByteString
+showBS (Vec3 (x, y, z)) =
+  BSC.intercalate " " [BSC.pack (show x), BSC.pack (show y), BSC.pack (show z)]
 
 instance (Floating a, Num a) => Num (Vec3 a) where
   (+) (Vec3 (x1, y1, z1)) (Vec3 (x2, y2, z2)) =
@@ -124,10 +131,10 @@ scaleColors = fmap scaleColor
 printRow :: (Int, [RGB]) -> IO ()
 printRow (i, row) = do
   hPutStr stderr ("\rRendering row " ++ show i ++ " of " ++ show imageHeight)
-  putStrLn $ showRow row
+  BSC.putStrLn $ showRow row
 
-showRow :: [RGB] -> String
-showRow row = unwords $ fmap show row
+showRow :: [RGB] -> BSC.ByteString
+showRow row = BSC.unwords $ fmap showBS row
 
 
 data Ray = Ray
