@@ -9,6 +9,7 @@ import           Control.Monad                 (foldM)
 import           Control.Monad.State.Strict    (State (..), evalState, get, put,
                                                 runState)
 import           Data.Foldable                 (foldl')
+import           Data.List                     (intercalate)
 import           Data.Word                     (Word8)
 import           System.IO                     (hPutStr, stderr)
 import           System.Random.Mersenne.Pure64
@@ -61,7 +62,7 @@ instance Functor Vec3 where
   fmap f (Vec3 (x, y, z)) = Vec3 (f x, f y, f z)
 
 instance Show a => Show (Vec3 a) where
-  show (Vec3 (x, y, z)) = show x ++ " " ++ show y ++ " " ++ show z
+  show (Vec3 (x, y, z)) = intercalate " " [show x, show y, show z]
 
 instance (Floating a, Num a) => Num (Vec3 a) where
   (+) (Vec3 (x1, y1, z1)) (Vec3 (x2, y2, z2)) =
