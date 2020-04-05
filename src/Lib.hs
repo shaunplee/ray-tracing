@@ -35,9 +35,9 @@ world :: [Shape]
 world =
   [ Sphere (Vec3 (0.0, 0.0, -1.0)) 0.5 (Lambertian (Vec3 (0.1, 0.2, 0.5)))
   , Sphere (Vec3 (0.0, -100.5, -1.0)) 100 (Lambertian (Vec3 (0.8, 0.8, 0.0)))
-  , Sphere (Vec3 (1.0, 0.0, -1.0)) 0.5 (Metal (Vec3 (0.8, 0.6, 0.2)) 0.3)
-  , Sphere (Vec3 (-1.0, 0.0, -1.0)) 0.5 (Dielectric 1.5)
-  , Sphere (Vec3 (-1.0, 0.0, -1.0)) (-0.45) (Dielectric 1.5)]
+  , Sphere (Vec3 (1.0, 0.0, -1.0)) 0.5 (Metal (Vec3 (0.8, 0.6, 0.2)) (Fuzz 0.3))
+  , Sphere (Vec3 (-1.0, 0.0, -1.0)) 0.5 (Dielectric (RefractiveIdx 1.5))
+  , Sphere (Vec3 (-1.0, 0.0, -1.0)) (-0.45) (Dielectric (RefractiveIdx 1.5))]
 
 type RandomState = State PureMT
 
@@ -154,8 +154,12 @@ class Hittable b where
 
 data Material
   = Lambertian Attenuation
-  | Metal Attenuation Double
-  | Dielectric Double
+  | Metal Attenuation Fuzz
+  | Dielectric RefractiveIdx
+
+newtype Fuzz = Fuzz Double
+
+newtype RefractiveIdx = RefractiveIdx Double
 
 data Shape = Sphere
   { sphere_center   :: Vec3 Double
@@ -168,44 +172,44 @@ scatter (Lambertian att) rin hit_rec = do
   rUnit <- randomUnitVectorM
   let target = hit_p hit_rec + hit_normal hit_rec + rUnit
   return $ Just (Ray (hit_p hit_rec) (target - hit_p hit_rec), att)
-scatter (Metal att fuzz) rin hit_rec = do
+scatter (Metal att (Fuzz fuzz)) rin hit_rec = do
   rUnit <- randomUnitVectorM
   let reflected = reflect (makeUnitVector (direction rin)) (hit_normal hit_rec)
   let scattered = Ray (hit_p hit_rec) (reflected + scale fuzz rUnit)
   return $ if dot (direction scattered) (hit_normal hit_rec) > 0.0
            then Just (scattered, att)
            else Nothing
-scatter (Dielectric ref_idx) rin hit_rec = do
-  let reflected = reflect (direction rin) (hit_normal hit_rec)
+scatter (Dielectric (RefractiveIdx ref_idx)) rin hit_rec = do
   let attenuation = Vec3 (1.0, 1.0, 1.0)
-  let (outward_normal, nint, cos) =
-        if dot (direction rin) (hit_normal hit_rec) > 0.0
-          then ( negate (hit_normal hit_rec)
-               , ref_idx
-               , ref_idx * dot (direction rin) (hit_normal hit_rec) /
-                 Lib.length (direction rin))
-          else ( hit_normal hit_rec
-               , 1.0 / ref_idx
-               , -dot (direction rin) (hit_normal hit_rec) /
-                 Lib.length (direction rin))
+  let etaiOverEtat =
+        if hit_frontFace hit_rec
+          then 1.0 / ref_idx
+          else ref_idx
+  let unitDirection = makeUnitVector (direction rin)
+  let cosTheta = min (dot (-unitDirection) (hit_normal hit_rec)) 1.0
+  let sinTheta = sqrt (1.0 - cosTheta * cosTheta)
   rd <- randomDoubleM
-  case refract (direction rin) outward_normal nint of
-    Just refracted -> if rd > schlick cos ref_idx
-      then return $ Just (Ray (hit_p hit_rec) refracted, attenuation)
-      else return $ Just (Ray (hit_p hit_rec) reflected, attenuation)
-    Nothing -> return $ Just (Ray (hit_p hit_rec) reflected, attenuation)
+  return $
+    if etaiOverEtat * sinTheta > 1.0
+      then let reflected = reflect unitDirection (hit_normal hit_rec)
+            in Just (Ray (hit_p hit_rec) reflected, attenuation)
+      else if rd < schlick cosTheta etaiOverEtat
+             then let reflected = reflect unitDirection (hit_normal hit_rec)
+                   in Just (Ray (hit_p hit_rec) reflected, attenuation)
+             else let refracted =
+                        refract unitDirection (hit_normal hit_rec) etaiOverEtat
+                   in Just (Ray (hit_p hit_rec) refracted, attenuation)
 
 reflect :: XYZ -> XYZ -> XYZ
 reflect v n = v - scale (2.0 * dot v n) n
 
-refract :: XYZ -> XYZ -> Double -> Maybe XYZ
-refract v n nint =
+refract :: XYZ -> XYZ -> Double -> XYZ
+refract v n etaiOverEtat =
   let uv = makeUnitVector v
-      dt = dot uv n
-      discriminant = 1.0 - nint * nint * (1 - dt * dt)
-   in if discriminant > 0
-      then Just $ scale nint (uv - scale dt n) - scale (sqrt discriminant) n
-      else Nothing
+      cosTheta = dot (-uv) n
+      rOutParallel = scale etaiOverEtat (uv + scale cosTheta n)
+      rOutPerp = scale (-sqrt (1.0 - squaredLength rOutParallel)) n
+   in rOutParallel + rOutPerp
 
 -- Christopher Schlick approximation for reflectivity of glass based on angle
 schlick :: Double -> Double -> Double
@@ -370,14 +374,14 @@ rayColor r htbls depth = rayColorHelp r htbls depth (Vec3 (1.0, 1.0, 1.0))
       case hitList htbls r 0.001 (read "Infinity" :: Double) of
         Just h -> do
           gen <- get
-          if depth > 0
-            then do
+          if depth <= 0
+            then return (Vec3 (0.0, 0.0, 0.0))
+            else do
               mscatter <- scatter (hit_material h) r h
               case mscatter of
                 Just (sray, att) ->
                   rayColorHelp sray htbls (depth - 1) (att_acc * att)
                 Nothing -> return $ Vec3 (0.0, 0.0, 0.0)
-            else return (Vec3 (0.0, 0.0, 0.0))
         Nothing ->
           let unitDirection = makeUnitVector (direction r)
               t = 0.5 * (vecY unitDirection + 1.0)
