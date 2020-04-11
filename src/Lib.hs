@@ -401,28 +401,26 @@ rayColor r htbls depth =
       -> Attenuation
       -> RandomState (Vec3 Double)
     rayColorHelp r htbls depth (Attenuation att_acc) =
-      case hitList htbls r 0.001 infinity of
-        Just h -> do
-          gen <- get
-          if depth <= 0
-            then return (Vec3 (0.0, 0.0, 0.0))
-            else do
-              mscatter <- scatter (hit_material h) r h
-              case mscatter of
-                Just (sray, Attenuation att) ->
-                  rayColorHelp
-                    sray
-                    htbls
-                    (depth - 1)
-                    (Attenuation (att_acc * att))
-                Nothing -> return $ Vec3 (0.0, 0.0, 0.0)
-        Nothing ->
-          let unitDirection = makeUnitVector (direction r)
-              t = 0.5 * (vecY unitDirection + 1.0)
-           in return $
-              att_acc *
-              (scale (1.0 - t) (Vec3 (1.0, 1.0, 1.0)) +
-               scale t (Vec3 (0.5, 0.7, 1.0)))
+      if depth <= 0
+        then return (Vec3 (0.0, 0.0, 0.0))
+        else case hitList htbls r 0.001 infinity of
+               Just h -> do
+                 mscatter <- scatter (hit_material h) r h
+                 case mscatter of
+                   Just (sray, Attenuation att) ->
+                     rayColorHelp
+                       sray
+                       htbls
+                       (depth - 1)
+                       (Attenuation (att_acc * att))
+                   Nothing -> return $ Vec3 (0.0, 0.0, 0.0)
+               Nothing ->
+                 let unitDirection = makeUnitVector (direction r)
+                     t = 0.5 * (vecY unitDirection + 1.0)
+                  in return $
+                     att_acc *
+                     (scale (1.0 - t) (Vec3 (1.0, 1.0, 1.0)) +
+                      scale t (Vec3 (0.5, 0.7, 1.0)))
 
 sampleColor :: (Int, Int) -> Vec3 Double -> Int -> RandomState (Vec3 Double)
 sampleColor (x, y) accCol _ = do
