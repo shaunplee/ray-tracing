@@ -27,25 +27,39 @@ imageWidth = 400
 imageHeight :: Int
 imageHeight = 200
 
+infinity :: Double
+infinity = read "Infinity" :: Double
 
 rWorld :: Double
 rWorld = cos (pi / 4.0)
 
+-- The shapes in the world to be rendered
 world :: [Shape]
 world =
-  [ Sphere (Vec3 (0.0, 0.0, -1.0)) 0.5 (Lambertian (Vec3 (0.1, 0.2, 0.5)))
-  , Sphere (Vec3 (0.0, -100.5, -1.0)) 100 (Lambertian (Vec3 (0.8, 0.8, 0.0)))
-  , Sphere (Vec3 (1.0, 0.0, -1.0)) 0.5 (Metal (Vec3 (0.8, 0.6, 0.2)) (Fuzz 0.3))
+  [ Sphere
+      (Vec3 (0.0, 0.0, -1.0))
+      0.5
+      (Lambertian (Attenuation $ Vec3 (0.1, 0.2, 0.5)))
+  , Sphere
+      (Vec3 (0.0, -100.5, -1.0))
+      100
+      (Lambertian (Attenuation $ Vec3 (0.8, 0.8, 0.0)))
+  , Sphere
+      (Vec3 (1.0, 0.0, -1.0))
+      0.5
+      (Metal (Attenuation $ Vec3 (0.8, 0.6, 0.2)) (Fuzz 0.3))
   , Sphere (Vec3 (-1.0, 0.0, -1.0)) 0.5 (Dielectric (RefractiveIdx 1.5))
-  , Sphere (Vec3 (-1.0, 0.0, -1.0)) (-0.45) (Dielectric (RefractiveIdx 1.5))]
+  , Sphere (Vec3 (-1.0, 0.0, -1.0)) (-0.45) (Dielectric (RefractiveIdx 1.5))
+  ]
 
+-- Use the State monad to thread the random number generator
 type RandomState = State PureMT
 
+-- Final representation of a color of a pixel before output
 type RGB = Vec3 Word8
 
+-- General 3-dimensional Doubles--could be color or vector or position
 type XYZ = Vec3 Double
-
-type Attenuation = Vec3 Double
 
 newtype Vec3 a = Vec3 (a, a, a)
 
@@ -116,8 +130,14 @@ rgbg (Vec3 (_, y, _)) = y
 rgbb :: RGB -> Word8
 rgbb (Vec3 (_, _, z)) = z
 
+clamp :: Double -> Double -> Double -> Double
+clamp x min max =
+  if | x < min -> min
+     | x > max -> max
+     | otherwise -> x
+
 scaleColor :: Double -> Word8
-scaleColor x = floor (255.99 * sqrt x)
+scaleColor x = floor $ 256 * clamp (sqrt x) 0.0 0.999
 
 scaleColors :: Vec3 Double -> RGB
 scaleColors = fmap scaleColor
@@ -157,6 +177,8 @@ data Material
   | Metal Attenuation Fuzz
   | Dielectric RefractiveIdx
 
+newtype Attenuation = Attenuation (Vec3 Double)
+
 newtype Fuzz = Fuzz Double
 
 newtype RefractiveIdx = RefractiveIdx Double
@@ -192,13 +214,15 @@ scatter (Dielectric (RefractiveIdx ref_idx)) rin hit_rec = do
   return $
     if etaiOverEtat * sinTheta > 1.0
       then let reflected = reflect unitDirection (hit_normal hit_rec)
-            in Just (Ray (hit_p hit_rec) reflected, attenuation)
+            in Just (Ray (hit_p hit_rec) reflected, Attenuation attenuation)
       else if rd < schlick cosTheta etaiOverEtat
              then let reflected = reflect unitDirection (hit_normal hit_rec)
-                   in Just (Ray (hit_p hit_rec) reflected, attenuation)
+                   in Just
+                        (Ray (hit_p hit_rec) reflected, Attenuation attenuation)
              else let refracted =
                         refract unitDirection (hit_normal hit_rec) etaiOverEtat
-                   in Just (Ray (hit_p hit_rec) refracted, attenuation)
+                   in Just
+                        (Ray (hit_p hit_rec) refracted, Attenuation attenuation)
 
 reflect :: XYZ -> XYZ -> XYZ
 reflect v n = v - scale (2.0 * dot v n) n
@@ -273,6 +297,11 @@ randomDoubleM = do
   let (x, g2) = randomDouble g1
   put g2
   return x
+
+randomDoubleRM :: Double -> Double -> RandomState Double
+randomDoubleRM min max = do
+  rd <- randomDoubleM
+  return $ min + (max - min) * rd
 
 randomInUnitSphereM :: RandomState (Vec3 Double)
 randomInUnitSphereM = do
@@ -361,7 +390,8 @@ newCamera lookfrom lookat vup vfov aspect aperture =
    in Camera origin lowerLeftCorner horizontal vertical u v w lensRadius
 
 rayColor :: (Hittable a) => Ray -> [a] -> Int -> RandomState (Vec3 Double)
-rayColor r htbls depth = rayColorHelp r htbls depth (Vec3 (1.0, 1.0, 1.0))
+rayColor r htbls depth =
+  rayColorHelp r htbls depth (Attenuation $ Vec3 (1.0, 1.0, 1.0))
   where
     rayColorHelp ::
          (Hittable a)
@@ -370,8 +400,8 @@ rayColor r htbls depth = rayColorHelp r htbls depth (Vec3 (1.0, 1.0, 1.0))
       -> Int
       -> Attenuation
       -> RandomState (Vec3 Double)
-    rayColorHelp r htbls depth att_acc =
-      case hitList htbls r 0.001 (read "Infinity" :: Double) of
+    rayColorHelp r htbls depth (Attenuation att_acc) =
+      case hitList htbls r 0.001 infinity of
         Just h -> do
           gen <- get
           if depth <= 0
@@ -379,8 +409,12 @@ rayColor r htbls depth = rayColorHelp r htbls depth (Vec3 (1.0, 1.0, 1.0))
             else do
               mscatter <- scatter (hit_material h) r h
               case mscatter of
-                Just (sray, att) ->
-                  rayColorHelp sray htbls (depth - 1) (att_acc * att)
+                Just (sray, Attenuation att) ->
+                  rayColorHelp
+                    sray
+                    htbls
+                    (depth - 1)
+                    (Attenuation (att_acc * att))
                 Nothing -> return $ Vec3 (0.0, 0.0, 0.0)
         Nothing ->
           let unitDirection = makeUnitVector (direction r)
@@ -390,8 +424,7 @@ rayColor r htbls depth = rayColorHelp r htbls depth (Vec3 (1.0, 1.0, 1.0))
               (scale (1.0 - t) (Vec3 (1.0, 1.0, 1.0)) +
                scale t (Vec3 (0.5, 0.7, 1.0)))
 
-sampleColor ::
-     (Int, Int) -> Vec3 Double -> Int -> RandomState (Vec3 Double)
+sampleColor :: (Int, Int) -> Vec3 Double -> Int -> RandomState (Vec3 Double)
 sampleColor (x, y) accCol _ = do
   gen <- get
   let (ru, g1) = randomDouble gen
