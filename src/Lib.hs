@@ -9,9 +9,10 @@ import           Control.Monad                 (foldM)
 import           Control.Monad.Reader
 import           Control.Monad.State.Strict    (State (..), evalState, get, put,
                                                 runState)
-import           Control.Monad.Trans.Class     (lift)
+import           Control.Monad.Trans           (lift)
 import           Data.Foldable                 (foldl')
 import           Data.List                     (intercalate)
+import           Data.Maybe                    (catMaybes)
 import           Data.Word                     (Word8)
 import           System.IO                     (hPutStr, stderr)
 import           System.Random.Mersenne.Pure64
@@ -25,22 +26,20 @@ maxDepth = 50
 
 -- X and Y dimensions of output image
 imageWidth :: Int
-imageWidth = 400
+imageWidth = 600
 imageHeight :: Int
-imageHeight = 200
+imageHeight = 400
 
 infinity :: Double
 infinity = read "Infinity" :: Double
 
-rWorld :: Double
-rWorld = cos (pi / 4.0)
-
 type World = [Shape]
 
 -- Use the State monad to thread the random number generator
---type RandomState = State PureMT
+-- Use the ReaderT monad to track global state
+type RandomState = State PureMT
 
-type RayTracingM = ReaderT World (State PureMT)
+type RayTracingM = ReaderT World RandomState
 
 -- Final representation of a color of a pixel before output
 type RGB = Vec3 Word8
@@ -63,7 +62,7 @@ instance Functor Vec3 where
   fmap f (Vec3 (x, y, z)) = Vec3 (f x, f y, f z)
 
 instance Show a => Show (Vec3 a) where
-  show (Vec3 (x, y, z)) = intercalate " " [show x, show y, show z]
+  show (Vec3 (x, y, z)) = unwords [show x, show y, show z]
 
 instance (Floating a, Num a) => Num (Vec3 a) where
   (+) (Vec3 (x1, y1, z1)) (Vec3 (x2, y2, z2)) =
@@ -176,7 +175,7 @@ data Shape = Sphere
   , sphere_material :: Material
   }
 
-scatter :: Material -> Ray -> Hit -> RayTracingM (Maybe (Ray, Attenuation))
+scatter :: Material -> Ray -> Hit -> RandomState (Maybe (Ray, Attenuation))
 scatter (Lambertian att) rin hit_rec = do
   rUnit <- randomUnitVectorM
   let scatterDirection = hit_normal hit_rec + rUnit
@@ -274,19 +273,35 @@ hitSphere center radius ray =
      -- there's a hit
      else ((-b) - sqrt discriminant) / (2.0 * a)
 
-randomDoubleM :: RayTracingM Double
+randomDoubleM :: RandomState Double
 randomDoubleM = do
   g1 <- get
   let (x, g2) = randomDouble g1
   put g2
   return x
 
-randomDoubleRM :: Double -> Double -> RayTracingM Double
+randomDoubleRM :: Double -> Double -> RandomState Double
 randomDoubleRM min max = do
   rd <- randomDoubleM
   return $ min + (max - min) * rd
 
-randomInUnitSphereM :: RayTracingM (Vec3 Double)
+randomVec3DoubleM :: RandomState (Vec3 Double)
+randomVec3DoubleM = do
+  gen <- get
+  let (x, g1) = randomDouble gen
+  let (y, g2) = randomDouble g1
+  let (z, g3) = randomDouble g2
+  put g3
+  return $ Vec3 (x, y, z)
+
+randomVec3DoubleRM :: Double -> Double -> RandomState (Vec3 Double)
+randomVec3DoubleRM min max = do
+  x <- randomDoubleRM min max
+  y <- randomDoubleRM min max
+  z <- randomDoubleRM min max
+  return $ Vec3 (x, y, z)
+
+randomInUnitSphereM :: RandomState (Vec3 Double)
 randomInUnitSphereM = do
   gen <- get
   let (rUnit, gen1) = randomInUnitSphere gen
@@ -303,7 +318,7 @@ randomInUnitSphere gen =
         then (p, g3)
         else randomInUnitSphere g3
 
-randomInUnitDiskM :: RayTracingM (Vec3 Double)
+randomInUnitDiskM :: RandomState (Vec3 Double)
 randomInUnitDiskM = do
   gen <- get
   let (rUnit, gen1) = randomInUnitDisk gen
@@ -319,7 +334,7 @@ randomInUnitDisk gen =
         then (p, g2)
         else randomInUnitDisk g2
 
-randomUnitVectorM :: RayTracingM (Vec3 Double)
+randomUnitVectorM :: RandomState (Vec3 Double)
 randomUnitVectorM = do
   gen <- get
   let (aa, g1) = randomDouble gen
@@ -330,7 +345,7 @@ randomUnitVectorM = do
   put g2
   return $ Vec3 (r * cos a, r * sin a, z)
 
-randomInHemisphereM :: XYZ -> RayTracingM (Vec3 Double)
+randomInHemisphereM :: XYZ -> RandomState (Vec3 Double)
 randomInHemisphereM n = do
   inUnitSphere <- randomInUnitSphereM
   if (inUnitSphere `dot` n) > 0.0
@@ -348,7 +363,7 @@ data Camera = Camera
   , camera_lensRadius :: Double
   }
 
-getRay :: Camera -> Double -> Double -> RayTracingM Ray
+getRay :: Camera -> Double -> Double -> RandomState Ray
 getRay c s t = do
   rd <- fmap (scale $ camera_lensRadius c) randomInUnitDiskM
   let offset = scale (vecX rd) (camera_u c) + scale (vecY rd) (camera_v c)
@@ -362,12 +377,12 @@ getRay c s t = do
 defaultCamera :: Camera
 defaultCamera =
   newCamera
-    (Vec3 (3.0, 3.0, 2.0))
-    (Vec3 (0.0, 0.0, -1.0))
+    (Vec3 (13.0, 2.0, 3.0))
+    (Vec3 (0.0, 0.0, 0.0))
     (Vec3 (0.0, 1.0, 0.0))
     20.0
     (fromIntegral imageWidth / fromIntegral imageHeight)
-    0.6
+    0.1
 
 newCamera :: XYZ -> XYZ -> XYZ -> Double -> Double -> Double ->  Camera
 newCamera lookfrom lookat vup vfov aspect aperture =
@@ -388,30 +403,20 @@ newCamera lookfrom lookat vup vfov aspect aperture =
       vertical = scale (2 * halfHeight * focusDist) v
    in Camera origin lowerLeftCorner horizontal vertical u v w lensRadius
 
-rayColor :: (Hittable a) => Ray -> [a] -> Int -> RayTracingM (Vec3 Double)
-rayColor r htbls depth =
-  rayColorHelp r htbls depth (Attenuation $ Vec3 (1.0, 1.0, 1.0))
+rayColor :: Ray -> Int -> RayTracingM (Vec3 Double)
+rayColor r depth = rayColorHelp r depth (Attenuation $ Vec3 (1.0, 1.0, 1.0))
   where
-    rayColorHelp ::
-         (Hittable a)
-      => Ray
-      -> [a]
-      -> Int
-      -> Attenuation
-      -> RayTracingM (Vec3 Double)
-    rayColorHelp r htbls depth (Attenuation att_acc) =
+    rayColorHelp :: Ray -> Int -> Attenuation -> RayTracingM (Vec3 Double)
+    rayColorHelp r depth (Attenuation att_acc) = do
+      htbls <- ask
       if depth <= 0
         then return (Vec3 (0.0, 0.0, 0.0))
         else case hitList htbls r 0.001 infinity of
                Just h -> do
-                 mscatter <- scatter (hit_material h) r h
+                 mscatter <- lift $ scatter (hit_material h) r h
                  case mscatter of
                    Just (sray, Attenuation att) ->
-                     rayColorHelp
-                       sray
-                       htbls
-                       (depth - 1)
-                       (Attenuation (att_acc * att))
+                     rayColorHelp sray (depth - 1) (Attenuation (att_acc * att))
                    Nothing -> return $ Vec3 (0.0, 0.0, 0.0)
                Nothing ->
                  let unitDirection = makeUnitVector (direction r)
@@ -423,21 +428,20 @@ rayColor r htbls depth =
 
 sampleColor :: (Int, Int) -> Vec3 Double -> Int -> RayTracingM (Vec3 Double)
 sampleColor (x, y) accCol _ = do
-  gen <- lift get
+  gen <- get
   let (ru, g1) = randomDouble gen
   let (rv, g2) = randomDouble g1
   let u = (fromIntegral x + ru) / fromIntegral imageWidth
   let v = (fromIntegral y + rv) / fromIntegral imageHeight
-  r <- getRay defaultCamera u v
+  r <- lift $ getRay defaultCamera u v
   put g2
-  world <- ask
-  c1 <- rayColor r world maxDepth
+  c1 <- rayColor r maxDepth
   return $ accCol + c1
 
 renderPos :: (Int, Int) -> RayTracingM RGB
 renderPos (x, y) = do
   world <- ask
-  gen <- lift get
+  gen <- get
   let (summedColor, g1) =
         runState
           (runReaderT
@@ -465,7 +469,82 @@ someFunc = do
   putStrLn "255"
   let pp = pixelPositions imageWidth imageHeight
   gen <- newPureMT
-  let world = []
-  let vals = evalState (runReaderT (mapM renderRow pp) world) gen
+  let (world, g1) = makeWorld gen
+  let vals = evalState (runReaderT (mapM renderRow pp) world) g1
   mapM_ printRow (zip [1 .. imageHeight] vals)
   hPutStr stderr "\nDone.\n"
+
+-- |Generate the image from the cover of the book with lots of spheres
+makeWorld :: PureMT -> (World, PureMT)
+makeWorld gen = runState makeWorldM gen
+  where
+    makeWorldM :: RandomState World
+    makeWorldM = do
+      let ns = [(x, y) | x <- [-11 .. 10], y <- [-11 .. 10]]
+      let ground =
+            Sphere
+              (Vec3 (0.0, -1000.0, 0.0))
+              1000
+              (Lambertian (Attenuation $ Vec3 (0.5, 0.5, 0.5)))
+      let s1 =
+            Sphere (Vec3 (0.0, 1.0, 0.0)) 1.0 (Dielectric (RefractiveIdx 1.5))
+      let s2 =
+            Sphere
+              (Vec3 (-4.0, 1.0, 0.0))
+              1.0
+              (Lambertian (Attenuation $ Vec3 (0.5, 0.5, 0.5)))
+      let s3 =
+            Sphere
+              (Vec3 (4.0, 1.0, 0.0))
+              1.0
+              (Metal (Attenuation $ Vec3 (0.7, 0.6, 0.5)) (Fuzz 0.0))
+      nps <- fmap catMaybes $ mapM (\(a, b) -> makeRandomSphereM a b) ns
+      return $ ground : s1 : s2 : s3 : nps
+    makeRandomSphereM :: Int -> Int -> RandomState (Maybe Shape)
+    makeRandomSphereM a b = do
+      mat <- randomDoubleM
+      px <- randomDoubleM
+      py <- randomDoubleM
+      let center =
+            Vec3 (fromIntegral a + 0.9 * px, 0.2, fromIntegral b + 0.9 * py)
+      if Lib.length (center - Vec3 (4.0, 0.2, 0)) <= 0.9
+        then return Nothing
+        else if | mat < 0.8 -- Diffuse
+                 ->
+                  do a1 <- randomVec3DoubleM
+                     a2 <- randomVec3DoubleM
+                     let albedo = a1 * a2
+                     return $
+                       Just $
+                       Sphere center 0.2 (Lambertian (Attenuation albedo))
+                | mat < 0.95 -- Metal
+                 ->
+                  do albedo <- randomVec3DoubleRM 0.5 1.0
+                     fuzz <- randomDoubleRM 0.0 0.5
+                     return $
+                       Just $
+                       Sphere
+                         center
+                         0.2
+                         (Metal (Attenuation albedo) (Fuzz fuzz))
+                | otherwise --Glass
+                 ->
+                  return $
+                  Just $ Sphere center 0.2 (Dielectric (RefractiveIdx 1.5))
+
+oldWorld =
+  [ Sphere
+      (Vec3 (0.0, 0.0, -1.0))
+      0.5
+      (Lambertian (Attenuation $ Vec3 (0.1, 0.2, 0.5)))
+  , Sphere
+      (Vec3 (0.0, -100.5, -1.0))
+      100
+      (Lambertian (Attenuation $ Vec3 (0.8, 0.8, 0.0)))
+  , Sphere
+      (Vec3 (1.0, 0.0, -1.0))
+      0.5
+      (Metal (Attenuation $ Vec3 (0.8, 0.6, 0.2)) (Fuzz 0.3))
+  , Sphere (Vec3 (-1.0, 0.0, -1.0)) 0.5 (Dielectric (RefractiveIdx 1.5))
+  , Sphere (Vec3 (-1.0, 0.0, -1.0)) (-0.45) (Dielectric (RefractiveIdx 1.5))
+  ]
