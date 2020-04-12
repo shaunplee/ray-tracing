@@ -6,8 +6,10 @@ module Lib
     ) where
 
 import           Control.Monad                 (foldM)
+import           Control.Monad.Reader
 import           Control.Monad.State.Strict    (State (..), evalState, get, put,
                                                 runState)
+import           Control.Monad.Trans.Class     (lift)
 import           Data.Foldable                 (foldl')
 import           Data.List                     (intercalate)
 import           Data.Word                     (Word8)
@@ -33,27 +35,12 @@ infinity = read "Infinity" :: Double
 rWorld :: Double
 rWorld = cos (pi / 4.0)
 
--- The shapes in the world to be rendered
-world :: [Shape]
-world =
-  [ Sphere
-      (Vec3 (0.0, 0.0, -1.0))
-      0.5
-      (Lambertian (Attenuation $ Vec3 (0.1, 0.2, 0.5)))
-  , Sphere
-      (Vec3 (0.0, -100.5, -1.0))
-      100
-      (Lambertian (Attenuation $ Vec3 (0.8, 0.8, 0.0)))
-  , Sphere
-      (Vec3 (1.0, 0.0, -1.0))
-      0.5
-      (Metal (Attenuation $ Vec3 (0.8, 0.6, 0.2)) (Fuzz 0.3))
-  , Sphere (Vec3 (-1.0, 0.0, -1.0)) 0.5 (Dielectric (RefractiveIdx 1.5))
-  , Sphere (Vec3 (-1.0, 0.0, -1.0)) (-0.45) (Dielectric (RefractiveIdx 1.5))
-  ]
+type World = [Shape]
 
 -- Use the State monad to thread the random number generator
-type RandomState = State PureMT
+--type RandomState = State PureMT
+
+type RayTracingM = ReaderT World (State PureMT)
 
 -- Final representation of a color of a pixel before output
 type RGB = Vec3 Word8
@@ -189,11 +176,12 @@ data Shape = Sphere
   , sphere_material :: Material
   }
 
-scatter :: Material -> Ray -> Hit -> RandomState (Maybe (Ray, Attenuation))
+scatter :: Material -> Ray -> Hit -> RayTracingM (Maybe (Ray, Attenuation))
 scatter (Lambertian att) rin hit_rec = do
   rUnit <- randomUnitVectorM
-  let target = hit_p hit_rec + hit_normal hit_rec + rUnit
-  return $ Just (Ray (hit_p hit_rec) (target - hit_p hit_rec), att)
+  let scatterDirection = hit_normal hit_rec + rUnit
+  let scattered = Ray (hit_p hit_rec) scatterDirection
+  return $ Just (scattered, att)
 scatter (Metal att (Fuzz fuzz)) rin hit_rec = do
   rUnit <- randomUnitVectorM
   let reflected = reflect (makeUnitVector (direction rin)) (hit_normal hit_rec)
@@ -212,17 +200,12 @@ scatter (Dielectric (RefractiveIdx ref_idx)) rin hit_rec = do
   let sinTheta = sqrt (1.0 - cosTheta * cosTheta)
   rd <- randomDoubleM
   return $
-    if etaiOverEtat * sinTheta > 1.0
+    if (etaiOverEtat * sinTheta > 1.0) || rd < schlick cosTheta etaiOverEtat
       then let reflected = reflect unitDirection (hit_normal hit_rec)
             in Just (Ray (hit_p hit_rec) reflected, Attenuation attenuation)
-      else if rd < schlick cosTheta etaiOverEtat
-             then let reflected = reflect unitDirection (hit_normal hit_rec)
-                   in Just
-                        (Ray (hit_p hit_rec) reflected, Attenuation attenuation)
-             else let refracted =
-                        refract unitDirection (hit_normal hit_rec) etaiOverEtat
-                   in Just
-                        (Ray (hit_p hit_rec) refracted, Attenuation attenuation)
+      else let refracted =
+                 refract unitDirection (hit_normal hit_rec) etaiOverEtat
+            in Just (Ray (hit_p hit_rec) refracted, Attenuation attenuation)
 
 reflect :: XYZ -> XYZ -> XYZ
 reflect v n = v - scale (2.0 * dot v n) n
@@ -291,19 +274,19 @@ hitSphere center radius ray =
      -- there's a hit
      else ((-b) - sqrt discriminant) / (2.0 * a)
 
-randomDoubleM :: RandomState Double
+randomDoubleM :: RayTracingM Double
 randomDoubleM = do
   g1 <- get
   let (x, g2) = randomDouble g1
   put g2
   return x
 
-randomDoubleRM :: Double -> Double -> RandomState Double
+randomDoubleRM :: Double -> Double -> RayTracingM Double
 randomDoubleRM min max = do
   rd <- randomDoubleM
   return $ min + (max - min) * rd
 
-randomInUnitSphereM :: RandomState (Vec3 Double)
+randomInUnitSphereM :: RayTracingM (Vec3 Double)
 randomInUnitSphereM = do
   gen <- get
   let (rUnit, gen1) = randomInUnitSphere gen
@@ -320,7 +303,23 @@ randomInUnitSphere gen =
         then (p, g3)
         else randomInUnitSphere g3
 
-randomUnitVectorM :: RandomState (Vec3 Double)
+randomInUnitDiskM :: RayTracingM (Vec3 Double)
+randomInUnitDiskM = do
+  gen <- get
+  let (rUnit, gen1) = randomInUnitDisk gen
+  put gen1
+  return rUnit
+
+randomInUnitDisk :: PureMT -> (Vec3 Double, PureMT)
+randomInUnitDisk gen =
+  let (x, g1) = randomDouble gen
+      (y, g2) = randomDouble g1
+      p = scale 2.0 (Vec3 (x, y, 0)) - Vec3 (1.0, 1.0, 0)
+   in if squaredLength p < 1.0
+        then (p, g2)
+        else randomInUnitDisk g2
+
+randomUnitVectorM :: RayTracingM (Vec3 Double)
 randomUnitVectorM = do
   gen <- get
   let (aa, g1) = randomDouble gen
@@ -331,7 +330,7 @@ randomUnitVectorM = do
   put g2
   return $ Vec3 (r * cos a, r * sin a, z)
 
-randomInHemisphereM :: XYZ -> RandomState (Vec3 Double)
+randomInHemisphereM :: XYZ -> RayTracingM (Vec3 Double)
 randomInHemisphereM n = do
   inUnitSphere <- randomInUnitSphereM
   if (inUnitSphere `dot` n) > 0.0
@@ -349,16 +348,16 @@ data Camera = Camera
   , camera_lensRadius :: Double
   }
 
-getRay :: Camera -> Double -> Double -> RandomState Ray
-getRay c u v = do
-  rd <- fmap (scale (camera_lensRadius c)) randomInUnitSphereM
+getRay :: Camera -> Double -> Double -> RayTracingM Ray
+getRay c s t = do
+  rd <- fmap (scale $ camera_lensRadius c) randomInUnitDiskM
   let offset = scale (vecX rd) (camera_u c) + scale (vecY rd) (camera_v c)
   return $
     Ray
-      (offset + camera_origin c)
-      (camera_llc c + scale u (camera_horiz c) + scale v (camera_vert c) -
-       offset -
-       camera_origin c)
+      (camera_origin c + offset)
+      (camera_llc c + scale s (camera_horiz c) + scale t (camera_vert c) -
+       camera_origin c -
+       offset)
 
 defaultCamera :: Camera
 defaultCamera =
@@ -368,7 +367,7 @@ defaultCamera =
     (Vec3 (0.0, 1.0, 0.0))
     20.0
     (fromIntegral imageWidth / fromIntegral imageHeight)
-    2.0
+    0.6
 
 newCamera :: XYZ -> XYZ -> XYZ -> Double -> Double -> Double ->  Camera
 newCamera lookfrom lookat vup vfov aspect aperture =
@@ -389,7 +388,7 @@ newCamera lookfrom lookat vup vfov aspect aperture =
       vertical = scale (2 * halfHeight * focusDist) v
    in Camera origin lowerLeftCorner horizontal vertical u v w lensRadius
 
-rayColor :: (Hittable a) => Ray -> [a] -> Int -> RandomState (Vec3 Double)
+rayColor :: (Hittable a) => Ray -> [a] -> Int -> RayTracingM (Vec3 Double)
 rayColor r htbls depth =
   rayColorHelp r htbls depth (Attenuation $ Vec3 (1.0, 1.0, 1.0))
   where
@@ -399,7 +398,7 @@ rayColor r htbls depth =
       -> [a]
       -> Int
       -> Attenuation
-      -> RandomState (Vec3 Double)
+      -> RayTracingM (Vec3 Double)
     rayColorHelp r htbls depth (Attenuation att_acc) =
       if depth <= 0
         then return (Vec3 (0.0, 0.0, 0.0))
@@ -422,32 +421,37 @@ rayColor r htbls depth =
                      (scale (1.0 - t) (Vec3 (1.0, 1.0, 1.0)) +
                       scale t (Vec3 (0.5, 0.7, 1.0)))
 
-sampleColor :: (Int, Int) -> Vec3 Double -> Int -> RandomState (Vec3 Double)
+sampleColor :: (Int, Int) -> Vec3 Double -> Int -> RayTracingM (Vec3 Double)
 sampleColor (x, y) accCol _ = do
-  gen <- get
+  gen <- lift get
   let (ru, g1) = randomDouble gen
   let (rv, g2) = randomDouble g1
   let u = (fromIntegral x + ru) / fromIntegral imageWidth
   let v = (fromIntegral y + rv) / fromIntegral imageHeight
   r <- getRay defaultCamera u v
   put g2
+  world <- ask
   c1 <- rayColor r world maxDepth
   return $ accCol + c1
 
-renderPos :: (Int, Int) -> RandomState RGB
+renderPos :: (Int, Int) -> RayTracingM RGB
 renderPos (x, y) = do
-  gen <- get
+  world <- ask
+  gen <- lift get
   let (summedColor, g1) =
         runState
-          (foldM (sampleColor (x, y)) (Vec3 (0.0, 0.0, 0.0)) [0 .. ns - 1])
+          (runReaderT
+             (foldM (sampleColor (x, y)) (Vec3 (0.0, 0.0, 0.0)) [0 .. ns - 1])
+             world)
           gen
   put g1
   return $ scaleColors (divide summedColor (fromIntegral ns))
 
-renderRow :: [(Int, Int)] -> RandomState [RGB]
+renderRow :: [(Int, Int)] -> RayTracingM [RGB]
 renderRow ps = do
+  world <- ask
   gen <- get
-  let (r, g1) = runState (mapM renderPos ps) gen
+  let (r, g1) = runState (runReaderT (mapM renderPos ps) world) gen
   put g1
   return r
 
@@ -461,6 +465,7 @@ someFunc = do
   putStrLn "255"
   let pp = pixelPositions imageWidth imageHeight
   gen <- newPureMT
-  let vals = evalState (mapM renderRow pp) gen
+  let world = []
+  let vals = evalState (runReaderT (mapM renderRow pp) world) gen
   mapM_ printRow (zip [1 .. imageHeight] vals)
   hPutStr stderr "\nDone.\n"
