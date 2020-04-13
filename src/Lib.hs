@@ -485,7 +485,7 @@ someFunc = do
 
 -- |Generate the image from the cover of the book with lots of spheres
 makeWorld :: PureMT -> (World, PureMT)
-makeWorld gen = runState makeWorldM gen
+makeWorld = runState makeWorldM
   where
     makeWorldM :: RandomState World
     makeWorldM = do
@@ -501,7 +501,7 @@ makeWorld gen = runState makeWorldM gen
             Sphere
               (Vec3 (-4.0, 1.0, 0.0))
               1.0
-              (Lambertian (Attenuation $ Vec3 (0.5, 0.5, 0.5)))
+              (Lambertian (Attenuation $ Vec3 (0.4, 0.2, 0.1)))
       let s3 =
             Sphere
               (Vec3 (4.0, 1.0, 0.0))
@@ -509,8 +509,8 @@ makeWorld gen = runState makeWorldM gen
               (Metal (Attenuation $ Vec3 (0.7, 0.6, 0.5)) (Fuzz 0.0))
       nps <- catMaybes <$> mapM makeRandomSphereM ns
       return $ ground : s1 : s2 : s3 : nps
-    makeRandomSphereM :: Int -> Int -> RandomState (Maybe Shape)
-    makeRandomSphereM a b = do
+    makeRandomSphereM :: (Int, Int) -> RandomState (Maybe Shape)
+    makeRandomSphereM (a, b) = do
       mat <- randomDoubleM
       px <- randomDoubleM
       py <- randomDoubleM
