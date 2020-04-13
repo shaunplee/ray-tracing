@@ -531,20 +531,3 @@ makeWorld gen = runState makeWorldM gen
                  ->
                   return $
                   Just $ Sphere center 0.2 (Dielectric (RefractiveIdx 1.5))
-
-oldWorld =
-  [ Sphere
-      (Vec3 (0.0, 0.0, -1.0))
-      0.5
-      (Lambertian (Attenuation $ Vec3 (0.1, 0.2, 0.5)))
-  , Sphere
-      (Vec3 (0.0, -100.5, -1.0))
-      100
-      (Lambertian (Attenuation $ Vec3 (0.8, 0.8, 0.0)))
-  , Sphere
-      (Vec3 (1.0, 0.0, -1.0))
-      0.5
-      (Metal (Attenuation $ Vec3 (0.8, 0.6, 0.2)) (Fuzz 0.3))
-  , Sphere (Vec3 (-1.0, 0.0, -1.0)) 0.5 (Dielectric (RefractiveIdx 1.5))
-  , Sphere (Vec3 (-1.0, 0.0, -1.0)) (-0.45) (Dielectric (RefractiveIdx 1.5))
-  ]
