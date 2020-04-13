@@ -238,18 +238,23 @@ instance Hittable Shape where
           then let sd = sqrt discriminant
                    temp1 = ((-b) - sd) / a
                    temp2 = ((-b) + sd) / a
-                in if | temp1 < t_max && temp1 > t_min -> Just $ recHit temp1
-                      | temp2 < t_max && temp2 > t_min -> Just $ recHit temp2
+                in if | t_min < temp1 && temp1 < t_max ->
+                        Just $ recHit temp1 r sphere
+                      | t_min < temp2 && temp2 < t_max ->
+                        Just $ recHit temp2 r sphere
                       | otherwise -> Nothing
           else Nothing
-    where
-      recHit temp =
-        let p = r `at` temp
-            outwardNormal =
-              divide (p - sphere_center sphere) (sphere_radius sphere)
-            frontFace = dot (direction r) outwardNormal < 0.0
-            n = if frontFace then outwardNormal else -outwardNormal
-         in Hit temp p n frontFace (sphere_material sphere)
+
+recHit :: Double -> Ray -> Shape -> Hit
+recHit temp r sphere =
+  let p = r `at` temp
+      outwardNormal = divide (p - sphere_center sphere) (sphere_radius sphere)
+      frontFace = dot (direction r) outwardNormal < 0.0
+      n =
+        if frontFace
+          then outwardNormal
+          else -outwardNormal
+   in Hit temp p n frontFace (sphere_material sphere)
 
 hitList :: Hittable a => [a] -> Ray -> Double -> Double -> Maybe Hit
 hitList htbls r t_min t_max =
