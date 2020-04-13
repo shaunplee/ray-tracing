@@ -23,6 +23,7 @@ ns :: Int
 ns = 100
 
 -- maximum number of reflections
+maxDepth :: Int
 maxDepth = 50
 
 -- X and Y dimensions of output image
@@ -43,7 +44,10 @@ type RandomState = State PureMT
 type RayTracingM = ReaderT World RandomState
 
 -- Final representation of a color of a pixel before output
-type RGB = Vec3 Word8
+newtype RGB = RGB (Word8, Word8, Word8)
+
+instance Show RGB where
+  show (RGB (r, g, b)) = unwords [show r, show g, show b]
 
 -- General 3-dimensional Doubles--could be color or vector or position
 type XYZ = Vec3 Double
@@ -107,16 +111,6 @@ cross :: Num a => Vec3 a -> Vec3 a -> Vec3 a
 cross (Vec3 (x1, y1, z1)) (Vec3 (x2, y2, z2)) =
   Vec3 (y1 * z2 - z1 * y2, z1 * x2 - x1 * z2, x1 * y2 - y1 * x2)
 
-
-rgbr :: RGB -> Word8
-rgbr (Vec3 (x, _, _)) = x
-
-rgbg :: RGB -> Word8
-rgbg (Vec3 (_, y, _)) = y
-
-rgbb :: RGB -> Word8
-rgbb (Vec3 (_, _, z)) = z
-
 clamp :: Double -> Double -> Double -> Double
 clamp x min max =
   if | x < min -> min
@@ -127,7 +121,7 @@ scaleColor :: Double -> Word8
 scaleColor x = floor $ 256 * clamp (sqrt x) 0.0 0.999
 
 scaleColors :: Vec3 Double -> RGB
-scaleColors = fmap scaleColor
+scaleColors (Vec3 (x, y, z)) = RGB (scaleColor x, scaleColor y, scaleColor z)
 
 printRow :: (Int, [RGB]) -> IO ()
 printRow (i, row) = do
