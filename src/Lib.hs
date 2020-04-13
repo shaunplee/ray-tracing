@@ -5,6 +5,7 @@ module Lib
     ( someFunc
     ) where
 
+import           Control.Applicative           ((<$>))
 import           Control.Monad                 (foldM)
 import           Control.Monad.Reader
 import           Control.Monad.State.Strict    (State (..), evalState, get, put,
@@ -498,7 +499,7 @@ makeWorld gen = runState makeWorldM gen
               (Vec3 (4.0, 1.0, 0.0))
               1.0
               (Metal (Attenuation $ Vec3 (0.7, 0.6, 0.5)) (Fuzz 0.0))
-      nps <- fmap catMaybes $ mapM (\(a, b) -> makeRandomSphereM a b) ns
+      nps <- catMaybes <$> mapM makeRandomSphereM ns
       return $ ground : s1 : s2 : s3 : nps
     makeRandomSphereM :: Int -> Int -> RandomState (Maybe Shape)
     makeRandomSphereM a b = do
