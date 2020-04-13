@@ -227,10 +227,12 @@ schlick cos ref_idx =
 
 instance Hittable Shape where
   hit sphere r t_min t_max =
-    let oc = origin r - sphere_center sphere
-        a = dot (direction r) (direction r)
-        b = dot oc (direction r)
-        c = dot oc oc - (sphere_radius sphere * sphere_radius sphere)
+    let dr = direction r
+        sr = sphere_radius sphere
+        oc = origin r - sphere_center sphere
+        a = seq dr (dot dr dr)
+        b = seq oc (dot oc dr)
+        c = seq sr (dot oc oc - (sr * sr))
         discriminant = b * b - a * c
      in if discriminant > 0
           then let sd = sqrt discriminant
@@ -264,8 +266,9 @@ hitList htbls r t_min t_max =
 hitSphere :: XYZ -> Double -> Ray -> Double
 hitSphere center radius ray =
   let oc = origin ray - center
-      a = dot (direction ray) (direction ray)
-      b = 2.0 * dot oc (direction ray)
+      dr = direction ray
+      a = dot dr dr
+      b = 2.0 * dot oc dr
       c = dot oc oc - (radius * radius)
       discriminant = b * b - 4 * a * c
   in if discriminant < 0.0
