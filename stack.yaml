@@ -47,6 +47,9 @@ packages:
 # Extra package databases containing global packages
 # extra-package-dbs: []
 
+ghc-options:
+  "$everything": -O2 -fexcess-precision -optc-O3 -optc-mfpmath=sse
+
 # Control whether we use the GHC we find on the path
 # system-ghc: true
 #

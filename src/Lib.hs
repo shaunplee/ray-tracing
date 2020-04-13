@@ -144,7 +144,7 @@ data Ray = Ray
   } deriving Show
 
 at :: Ray -> Double -> XYZ
-at r t = origin r + scale t (direction r)
+at (Ray or dr) t = or + scale t dr
 
 data Hit = Hit
   { hit_t         :: Double
@@ -156,8 +156,8 @@ data Hit = Hit
   , hit_material  :: Material
   }
 
-class Hittable b where
-  hit :: b -> Ray -> Double -> Double -> Maybe Hit
+-- class Hittable b where
+--   hit :: b -> Ray -> Double -> Double -> Maybe Hit
 
 data Material
   = Lambertian Attenuation
@@ -177,35 +177,35 @@ data Shape = Sphere
   }
 
 scatter :: Material -> Ray -> Hit -> RandomState (Maybe (Ray, Attenuation))
-scatter (Lambertian att) rin hit_rec = do
+scatter (Lambertian att) rin (Hit _ hp hn _ _) = do
   rUnit <- randomUnitVectorM
-  let scatterDirection = hit_normal hit_rec + rUnit
-  let scattered = Ray (hit_p hit_rec) scatterDirection
+  let scatterDirection = hn + rUnit
+  let scattered = Ray hp scatterDirection
   return $ Just (scattered, att)
-scatter (Metal att (Fuzz fuzz)) rin hit_rec = do
+scatter (Metal att (Fuzz fuzz)) rin (Hit _ hp hn _ _) = do
   rUnit <- randomUnitVectorM
-  let reflected = reflect (makeUnitVector (direction rin)) (hit_normal hit_rec)
-  let scattered = Ray (hit_p hit_rec) (reflected + scale fuzz rUnit)
-  return $ if dot (direction scattered) (hit_normal hit_rec) > 0.0
+  let reflected = reflect (makeUnitVector (direction rin)) hn
+  let scattered = Ray hp (reflected + scale fuzz rUnit)
+  return $ if dot (direction scattered) hn > 0.0
            then Just (scattered, att)
            else Nothing
-scatter (Dielectric (RefractiveIdx ref_idx)) rin hit_rec = do
+scatter (Dielectric (RefractiveIdx ref_idx)) rin (Hit _ hp hn hff _) = do
   let attenuation = Vec3 (1.0, 1.0, 1.0)
   let etaiOverEtat =
-        if hit_frontFace hit_rec
+        if hff
           then 1.0 / ref_idx
           else ref_idx
   let unitDirection = makeUnitVector (direction rin)
-  let cosTheta = min (dot (-unitDirection) (hit_normal hit_rec)) 1.0
+  let cosTheta = min (dot (-unitDirection) hn) 1.0
   let sinTheta = sqrt (1.0 - cosTheta * cosTheta)
   rd <- randomDoubleM
   return $
     if (etaiOverEtat * sinTheta > 1.0) || rd < schlick cosTheta etaiOverEtat
-      then let reflected = reflect unitDirection (hit_normal hit_rec)
-            in Just (Ray (hit_p hit_rec) reflected, Attenuation attenuation)
+      then let reflected = reflect unitDirection hn
+            in Just (Ray hp reflected, Attenuation attenuation)
       else let refracted =
-                 refract unitDirection (hit_normal hit_rec) etaiOverEtat
-            in Just (Ray (hit_p hit_rec) refracted, Attenuation attenuation)
+                 refract unitDirection hn etaiOverEtat
+            in Just (Ray hp refracted, Attenuation attenuation)
 
 reflect :: XYZ -> XYZ -> XYZ
 reflect v n = v - scale (2.0 * dot v n) n
@@ -225,53 +225,50 @@ schlick cos ref_idx =
       r1 = r0 * r0
    in r1 + (1.0 - r1) * (1 - cos) ** 5
 
-instance Hittable Shape where
-  hit sphere r t_min t_max =
-    let dr = direction r
-        sr = sphere_radius sphere
-        oc = origin r - sphere_center sphere
-        a = seq dr (dot dr dr)
-        b = seq oc (dot oc dr)
-        c = seq sr (dot oc oc - (sr * sr))
-        discriminant = b * b - a * c
-     in if discriminant > 0
-          then let sd = sqrt discriminant
-                   temp1 = ((-b) - sd) / a
-                   temp2 = ((-b) + sd) / a
-                in if | t_min < temp1 && temp1 < t_max ->
-                        Just $ recHit temp1 r sphere
-                      | t_min < temp2 && temp2 < t_max ->
-                        Just $ recHit temp2 r sphere
-                      | otherwise -> Nothing
-          else Nothing
+hit :: Shape -> Ray -> Double -> Double -> Maybe Hit
+hit sphere@(Sphere sc sr _) r@(Ray or dr) t_min t_max =
+  let oc = or - sc
+      a = dot dr dr
+      b = seq oc (dot oc dr)
+      c = seq sr (dot oc oc - (sr * sr))
+      discriminant = b * b - a * c
+   in if discriminant > 0
+        then let sd = sqrt discriminant
+                 temp1 = ((-b) - sd) / a
+                 temp2 = ((-b) + sd) / a
+              in if | t_min < temp1 && temp1 < t_max ->
+                      Just $ recHit temp1 r sphere
+                    | t_min < temp2 && temp2 < t_max ->
+                      Just $ recHit temp2 r sphere
+                    | otherwise -> Nothing
+        else Nothing
 
 recHit :: Double -> Ray -> Shape -> Hit
-recHit temp r sphere =
+recHit temp r@(Ray or dr) sphere@(Sphere sc sr sm) =
   let p = r `at` temp
-      outwardNormal = divide (p - sphere_center sphere) (sphere_radius sphere)
-      frontFace = dot (direction r) outwardNormal < 0.0
+      outwardNormal = divide (p - sc) sr
+      frontFace = dot dr outwardNormal < 0.0
       n =
         if frontFace
           then outwardNormal
           else -outwardNormal
-   in Hit temp p n frontFace (sphere_material sphere)
+   in Hit temp p n frontFace sm
 
-hitList :: Hittable a => [a] -> Ray -> Double -> Double -> Maybe Hit
+hitList :: [Shape] -> Ray -> Double -> Double -> Maybe Hit
 hitList htbls r t_min t_max =
   foldl'
     (\mh htbl ->
        case mh of
          Nothing -> hit htbl r t_min t_max
-         Just h  -> case hit htbl r t_min (hit_t h) of
+         Just (Hit ht _ _ _ _)  -> case hit htbl r t_min ht of
            Nothing -> mh
            h1      -> h1)
     Nothing
     htbls
 
 hitSphere :: XYZ -> Double -> Ray -> Double
-hitSphere center radius ray =
-  let oc = origin ray - center
-      dr = direction ray
+hitSphere center radius ray@(Ray or dr) =
+  let oc = or - center
       a = dot dr dr
       b = 2.0 * dot oc dr
       c = dot oc oc - (radius * radius)
