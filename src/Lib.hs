@@ -11,9 +11,13 @@ import           Control.Monad.Reader
 import           Control.Monad.State.Strict    (State (..), evalState, get, put,
                                                 runState)
 import           Control.Monad.Trans           (lift)
+import qualified Data.ByteString.Lazy          as B
+import qualified Data.ByteString.Lazy.Builder  as B
+import qualified Data.ByteString.Lazy.Char8    as C
 import           Data.Foldable                 (foldl')
-import           Data.List                     (intercalate)
+import           Data.List                     (intercalate, intersperse)
 import           Data.Maybe                    (catMaybes)
+import           Data.Monoid
 import           Data.Word                     (Word8)
 import           System.IO                     (hPutStr, stderr)
 import           System.Random.Mersenne.Pure64
@@ -124,11 +128,14 @@ scaleColors (Vec3 (x, y, z)) = RGB (scaleColor x, scaleColor y, scaleColor z)
 printRow :: (Int, [RGB]) -> IO ()
 printRow (i, row) = do
   hPutStr stderr ("\rRendering row " ++ show i ++ " of " ++ show imageHeight)
-  putStrLn $ showRow row
+  C.putStrLn $ B.toLazyByteString $ showRow row
 
-showRow :: [RGB] -> String
-showRow row = unwords $ fmap show row
+showRow :: [RGB] -> B.Builder
+showRow row =
+  unwords' $ map (mconcat . map B.char8 . show) row
 
+unwords' :: [B.Builder] -> B.Builder
+unwords' = mconcat . intersperse (B.char8 ' ')
 
 data Ray = Ray
   { origin    :: XYZ

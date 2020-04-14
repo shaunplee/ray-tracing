@@ -25,6 +25,7 @@ dependencies:
 library:
   source-dirs: src
   dependencies:
+    - bytestring
     - mtl
     - mersenne-random-pure64
     - transformers
