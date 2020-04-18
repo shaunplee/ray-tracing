@@ -471,17 +471,17 @@ someFunc = do
   let pp = pixelPositions imageWidth imageHeight
   gen <- newPureMT
   let (world, g1) = makeWorld gen
-  -- let vals =
-  --       runST
-  --         (do gRef <- newSTRef g1
-  --             evalStateT (runReaderT (mapM renderRow pp) world) gRef)
+  let vals = zip [1 .. imageHeight] pp
   mapM_
-    printRow
-    (zip
-       [1 .. imageHeight]
-       (runST
-          (do gRef <- newSTRef g1
-              evalStateT (runReaderT (mapM renderRow pp) world) gRef)))
+    (printRow .
+     (\(i, rm) ->
+        let r :: [RGB]
+            r =
+              runST $ do
+                gRef <- newSTRef g1
+                evalStateT (runReaderT (renderRow rm) world) gRef
+         in (i, r)))
+    vals
   hPutStr stderr "\nDone.\n"
 
 -- |Generate the image from the cover of the book with lots of spheres
