@@ -74,3 +74,13 @@ destructuring:
     Executed in   19.41 mins   fish           external
        usr time  1141.58 secs  148.00 micros  1141.58 secs
        sys time   29.44 secs  1105.00 micros   29.44 secs
+
+destructuring and ST:
+    time stack run > testrandomSTDetypeclass.ppm
+    Rendering row 400 of 400
+    Done.
+
+    ________________________________________________________
+    Executed in   17.69 mins   fish           external
+       usr time  1162.89 secs  123.00 micros  1162.89 secs
+       sys time   38.63 secs  794.00 micros   38.63 secs
