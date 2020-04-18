@@ -131,14 +131,14 @@ printRow (i, row) = do
 showRow :: [RGB] -> String
 showRow row = unwords $ fmap show row
 
+newtype Ray = Ray (XYZ, XYZ)
+  deriving Show
 
-data Ray = Ray
-  { origin    :: XYZ
-  , direction :: XYZ
-  } deriving Show
+direction :: Ray -> XYZ
+direction (Ray (_, dr)) = dr
 
 at :: Ray -> Double -> XYZ
-at (Ray or dr) t = or `vecAdd` scale t dr
+at (Ray (or, dr)) t = or `vecAdd` scale t dr
 
 data Hit = Hit
   { hit_t         :: Double
@@ -171,12 +171,12 @@ scatter :: Material -> Ray -> Hit -> RandomState s (Maybe (Ray, Attenuation))
 scatter (Lambertian att) rin (Hit _ hp hn _ _) = do
   rUnit <- randomUnitVectorM
   let scatterDirection = hn `vecAdd` rUnit
-  let scattered = Ray hp scatterDirection
+  let scattered = Ray (hp, scatterDirection)
   return $ Just (scattered, att)
 scatter (Metal att (Fuzz fuzz)) rin (Hit _ hp hn _ _) = do
   rUnit <- randomUnitVectorM
   let reflected = reflect (makeUnitVector (direction rin)) hn
-  let scattered = Ray hp (reflected `vecAdd` scale fuzz rUnit)
+  let scattered = Ray (hp, reflected `vecAdd` scale fuzz rUnit)
   return $ if dot (direction scattered) hn > 0.0
            then Just (scattered, att)
            else Nothing
@@ -193,10 +193,10 @@ scatter (Dielectric (RefractiveIdx ref_idx)) rin (Hit _ hp hn hff _) = do
   return $
     if (etaiOverEtat * sinTheta > 1.0) || rd < schlick cosTheta etaiOverEtat
       then let reflected = reflect unitDirection hn
-            in Just (Ray hp reflected, Attenuation attenuation)
+            in Just (Ray (hp, reflected), Attenuation attenuation)
       else let refracted =
                  refract unitDirection hn etaiOverEtat
-            in Just (Ray hp refracted, Attenuation attenuation)
+            in Just (Ray (hp, refracted), Attenuation attenuation)
 
 reflect :: XYZ -> XYZ -> XYZ
 reflect v n = v `vecSub` scale (2.0 * dot v n) n
@@ -217,7 +217,7 @@ schlick cos ref_idx =
    in r1 + (1.0 - r1) * (1 - cos) ** 5
 
 hit :: Shape -> Ray -> Double -> Double -> Maybe Hit
-hit sphere@(Sphere sc sr _) r@(Ray or dr) t_min t_max =
+hit sphere@(Sphere sc sr _) r@(Ray (or, dr)) t_min t_max =
   let oc = or `vecSub` sc
       a = dot dr dr
       b = seq oc (dot oc dr)
@@ -235,7 +235,7 @@ hit sphere@(Sphere sc sr _) r@(Ray or dr) t_min t_max =
         else Nothing
 
 recHit :: Double -> Ray -> Shape -> Hit
-recHit temp r@(Ray or dr) sphere@(Sphere sc sr sm) =
+recHit temp r@(Ray (or, dr)) sphere@(Sphere sc sr sm) =
   let p = r `at` temp
       outwardNormal = divide (p `vecSub` sc) sr
       frontFace = dot dr outwardNormal < 0.0
@@ -258,7 +258,7 @@ hitList htbls r t_min t_max =
     htbls
 
 hitSphere :: XYZ -> Double -> Ray -> Double
-hitSphere center radius ray@(Ray or dr) =
+hitSphere center radius ray@(Ray (or, dr)) =
   let oc = or `vecSub` center
       a = dot dr dr
       b = 2.0 * dot oc dr
@@ -372,11 +372,11 @@ getRay c s t = do
         scale (vecX rd) (camera_u c) `vecAdd` scale (vecY rd) (camera_v c)
   return $
     Ray
-      (camera_origin c `vecAdd` offset)
-      (camera_llc c `vecAdd` scale s (camera_horiz c) `vecAdd`
-       scale t (camera_vert c) `vecSub`
-       camera_origin c `vecSub`
-       offset)
+      ( (camera_origin c `vecAdd` offset)
+      , (camera_llc c `vecAdd` scale s (camera_horiz c) `vecAdd`
+         scale t (camera_vert c) `vecSub`
+         camera_origin c `vecSub`
+         offset))
 
 defaultCamera :: Camera
 defaultCamera =
