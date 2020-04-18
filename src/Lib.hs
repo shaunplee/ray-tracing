@@ -8,12 +8,14 @@ module Lib
 import           Control.Applicative           ((<$>))
 import           Control.Monad                 (foldM)
 import           Control.Monad.Reader
-import           Control.Monad.State.Strict    (State (..), evalState, get, put,
-                                                runState)
+import           Control.Monad.ST              (ST (..), runST)
 import           Control.Monad.Trans           (lift)
+import           Control.Monad.Trans.State     (StateT (..), evalStateT, get,
+                                                put, runStateT)
 import           Data.Foldable                 (foldl')
 import           Data.List                     (intercalate)
 import           Data.Maybe                    (catMaybes)
+import           Data.STRef
 import           Data.Word                     (Word8)
 import           System.IO                     (hPutStr, stderr)
 import           System.Random.Mersenne.Pure64
@@ -36,11 +38,11 @@ infinity = read "Infinity" :: Double
 
 type World = [Shape]
 
--- Use the State monad to thread the random number generator
+-- Use the ST monad to thread the random number generator
 -- Use the ReaderT monad to track global state
-type RandomState = State PureMT
+type RandomState s = StateT (STRef s PureMT) (ST s)
 
-type RayTracingM = ReaderT World RandomState
+type RayTracingM s = ReaderT World (RandomState s)
 
 -- Final representation of a color of a pixel before output
 type RGB = Vec3 Word8
@@ -176,7 +178,7 @@ data Shape = Sphere
   , sphere_material :: Material
   }
 
-scatter :: Material -> Ray -> Hit -> RandomState (Maybe (Ray, Attenuation))
+scatter :: Material -> Ray -> Hit -> RandomState s (Maybe (Ray, Attenuation))
 scatter (Lambertian att) rin (Hit _ hp hn _ _) = do
   rUnit <- randomUnitVectorM
   let scatterDirection = hn + rUnit
@@ -279,39 +281,42 @@ hitSphere center radius ray@(Ray or dr) =
      -- there's a hit
      else ((-b) - sqrt discriminant) / (2.0 * a)
 
-randomDoubleM :: RandomState Double
+randomDoubleM :: RandomState s Double
 randomDoubleM = do
-  g1 <- get
+  gRef <- get
+  g1 <- lift $ readSTRef gRef
   let (x, g2) = randomDouble g1
-  put g2
+  lift $ writeSTRef gRef g2
   return x
 
-randomDoubleRM :: Double -> Double -> RandomState Double
+randomDoubleRM :: Double -> Double -> RandomState s Double
 randomDoubleRM min max = do
   rd <- randomDoubleM
   return $ min + (max - min) * rd
 
-randomVec3DoubleM :: RandomState (Vec3 Double)
+randomVec3DoubleM :: RandomState s (Vec3 Double)
 randomVec3DoubleM = do
-  gen <- get
+  gRef <- get
+  gen <- lift $ readSTRef gRef
   let (x, g1) = randomDouble gen
   let (y, g2) = randomDouble g1
   let (z, g3) = randomDouble g2
-  put g3
+  lift $ writeSTRef gRef g3
   return $ Vec3 (x, y, z)
 
-randomVec3DoubleRM :: Double -> Double -> RandomState (Vec3 Double)
+randomVec3DoubleRM :: Double -> Double -> RandomState s (Vec3 Double)
 randomVec3DoubleRM min max = do
   x <- randomDoubleRM min max
   y <- randomDoubleRM min max
   z <- randomDoubleRM min max
   return $ Vec3 (x, y, z)
 
-randomInUnitSphereM :: RandomState (Vec3 Double)
+randomInUnitSphereM :: RandomState s (Vec3 Double)
 randomInUnitSphereM = do
-  gen <- get
+  gRef <- get
+  gen <- lift $ readSTRef gRef
   let (rUnit, gen1) = randomInUnitSphere gen
-  put gen1
+  lift $ writeSTRef gRef gen1
   return rUnit
 
 randomInUnitSphere :: PureMT -> (Vec3 Double, PureMT)
@@ -324,11 +329,12 @@ randomInUnitSphere gen =
         then (p, g3)
         else randomInUnitSphere g3
 
-randomInUnitDiskM :: RandomState (Vec3 Double)
+randomInUnitDiskM :: RandomState s (Vec3 Double)
 randomInUnitDiskM = do
-  gen <- get
+  gRef <- get
+  gen <- lift $ readSTRef gRef
   let (rUnit, gen1) = randomInUnitDisk gen
-  put gen1
+  lift $ writeSTRef gRef gen1
   return rUnit
 
 randomInUnitDisk :: PureMT -> (Vec3 Double, PureMT)
@@ -340,18 +346,19 @@ randomInUnitDisk gen =
         then (p, g2)
         else randomInUnitDisk g2
 
-randomUnitVectorM :: RandomState (Vec3 Double)
+randomUnitVectorM :: RandomState s (Vec3 Double)
 randomUnitVectorM = do
-  gen <- get
+  gRef <- get
+  gen <- lift $ readSTRef gRef
   let (aa, g1) = randomDouble gen
   let a = aa * 2 * pi
   let (zz, g2) = randomDouble g1
   let z = (zz * 2) - 1
   let r = sqrt (1 - z * z)
-  put g2
+  lift $ writeSTRef gRef g2
   return $ Vec3 (r * cos a, r * sin a, z)
 
-randomInHemisphereM :: XYZ -> RandomState (Vec3 Double)
+randomInHemisphereM :: XYZ -> RandomState s (Vec3 Double)
 randomInHemisphereM n = do
   inUnitSphere <- randomInUnitSphereM
   if (inUnitSphere `dot` n) > 0.0
@@ -369,7 +376,7 @@ data Camera = Camera
   , camera_lensRadius :: Double
   }
 
-getRay :: Camera -> Double -> Double -> RandomState Ray
+getRay :: Camera -> Double -> Double -> RandomState s Ray
 getRay c s t = do
   rd <- fmap (scale $ camera_lensRadius c) randomInUnitDiskM
   let offset = scale (vecX rd) (camera_u c) + scale (vecY rd) (camera_v c)
@@ -409,10 +416,10 @@ newCamera lookfrom lookat vup vfov aspect aperture =
       vertical = scale (2 * halfHeight * focusDist) v
    in Camera origin lowerLeftCorner horizontal vertical u v w lensRadius
 
-rayColor :: Ray -> Int -> RayTracingM (Vec3 Double)
+rayColor :: Ray -> Int -> RayTracingM s (Vec3 Double)
 rayColor r depth = rayColorHelp r depth (Attenuation $ Vec3 (1.0, 1.0, 1.0))
   where
-    rayColorHelp :: Ray -> Int -> Attenuation -> RayTracingM (Vec3 Double)
+    rayColorHelp :: Ray -> Int -> Attenuation -> RayTracingM s (Vec3 Double)
     rayColorHelp r depth (Attenuation att_acc) = do
       htbls <- ask
       if depth <= 0
@@ -432,38 +439,26 @@ rayColor r depth = rayColorHelp r depth (Attenuation $ Vec3 (1.0, 1.0, 1.0))
                      (scale (1.0 - t) (Vec3 (1.0, 1.0, 1.0)) +
                       scale t (Vec3 (0.5, 0.7, 1.0)))
 
-sampleColor :: (Int, Int) -> Vec3 Double -> Int -> RayTracingM (Vec3 Double)
+sampleColor :: (Int, Int) -> Vec3 Double -> Int -> RayTracingM s (Vec3 Double)
 sampleColor (x, y) accCol _ = do
-  gen <- get
+  gRef <- lift $ get
+  gen <- lift $ lift $ readSTRef gRef
   let (ru, g1) = randomDouble gen
   let (rv, g2) = randomDouble g1
   let u = (fromIntegral x + ru) / fromIntegral imageWidth
   let v = (fromIntegral y + rv) / fromIntegral imageHeight
   r <- lift $ getRay defaultCamera u v
-  put g2
+  lift $ lift $ writeSTRef gRef g2
   c1 <- rayColor r maxDepth
   return $ accCol + c1
 
-renderPos :: (Int, Int) -> RayTracingM RGB
+renderPos :: (Int, Int) -> RayTracingM s RGB
 renderPos (x, y) = do
-  world <- ask
-  gen <- get
-  let (summedColor, g1) =
-        runState
-          (runReaderT
-             (foldM (sampleColor (x, y)) (Vec3 (0.0, 0.0, 0.0)) [0 .. ns - 1])
-             world)
-          gen
-  put g1
+  summedColor <- foldM (sampleColor (x, y)) (Vec3 (0.0, 0.0, 0.0)) [0 .. ns - 1]
   return $ scaleColors (divide summedColor (fromIntegral ns))
 
-renderRow :: [(Int, Int)] -> RayTracingM [RGB]
-renderRow ps = do
-  world <- ask
-  gen <- get
-  let (r, g1) = runState (runReaderT (mapM renderPos ps) world) gen
-  put g1
-  return r
+renderRow :: [(Int, Int)] -> RayTracingM s [RGB]
+renderRow ps = mapM renderPos ps
 
 pixelPositions :: Int -> Int -> [[(Int, Int)]]
 pixelPositions nx ny = map (\y -> map (, y) [0 .. nx - 1]) [ny - 1,ny - 2 .. 0]
@@ -476,15 +471,29 @@ someFunc = do
   let pp = pixelPositions imageWidth imageHeight
   gen <- newPureMT
   let (world, g1) = makeWorld gen
-  let vals = evalState (runReaderT (mapM renderRow pp) world) g1
-  mapM_ printRow (zip [1 .. imageHeight] vals)
+  -- let vals =
+  --       runST
+  --         (do gRef <- newSTRef g1
+  --             evalStateT (runReaderT (mapM renderRow pp) world) gRef)
+  mapM_
+    printRow
+    (zip
+       [1 .. imageHeight]
+       (runST
+          (do gRef <- newSTRef g1
+              evalStateT (runReaderT (mapM renderRow pp) world) gRef)))
   hPutStr stderr "\nDone.\n"
 
 -- |Generate the image from the cover of the book with lots of spheres
 makeWorld :: PureMT -> (World, PureMT)
-makeWorld = runState makeWorldM
+makeWorld gen =
+  runST $ do
+    gRef <- newSTRef gen
+    world <- evalStateT makeWorldM gRef
+    g1 <- readSTRef gRef
+    return (world, g1)
   where
-    makeWorldM :: RandomState World
+    makeWorldM :: RandomState s World
     makeWorldM = do
       let ns = [(x, y) | x <- [-11 .. 10], y <- [-11 .. 10]]
       let ground =
@@ -506,7 +515,7 @@ makeWorld = runState makeWorldM
               (Metal (Attenuation $ Vec3 (0.7, 0.6, 0.5)) (Fuzz 0.0))
       nps <- catMaybes <$> mapM makeRandomSphereM ns
       return $ ground : s1 : s2 : s3 : nps
-    makeRandomSphereM :: (Int, Int) -> RandomState (Maybe Shape)
+    makeRandomSphereM :: (Int, Int) -> RandomState s (Maybe Shape)
     makeRandomSphereM (a, b) = do
       mat <- randomDoubleM
       px <- randomDoubleM
