@@ -10,7 +10,6 @@ import           Control.Monad                 (foldM)
 import           Control.Monad.Reader
 import           Control.Monad.ST.Lazy         (ST (..), runST)
 import           Control.Monad.Trans           (lift)
-import           Control.Monad.Trans.State     (StateT (..), evalStateT, get)
 import           Data.Foldable                 (foldl')
 import           Data.List                     (intercalate)
 import           Data.Maybe                    (catMaybes)
@@ -39,10 +38,17 @@ infinity = read "Infinity" :: Double
 type World = [Shape]
 
 -- Use the ST monad to thread the random number generator
--- Use the ReaderT monad to track global state
-type RandomState s = StateT (STRef s PureMT) (ST s)
+type RandomState s = ReaderT (STRef s World, STRef s PureMT) (ST s)
 
-type RayTracingM s = ReaderT World (RandomState s)
+getGenRef :: RandomState s (STRef s PureMT)
+getGenRef = do (_, genRef) <- ask
+               return genRef
+
+getWorldRef :: RandomState s (STRef s World)
+getWorldRef = do (worldRef, _) <- ask
+                 return worldRef
+
+type RayTracingM s = RandomState s
 
 -- Final representation of a color of a pixel before output
 newtype RGB = RGB (Word8, Word8, Word8)
@@ -271,7 +277,7 @@ hitSphere center radius ray@(Ray or dr) =
 
 randomDoubleM :: RandomState s Double
 randomDoubleM = do
-  gRef <- get
+  gRef <- getGenRef
   g1 <- lift $ readSTRef gRef
   let (x, g2) = randomDouble g1
   lift $ writeSTRef gRef g2
@@ -284,7 +290,7 @@ randomDoubleRM min max = do
 
 randomVec3DoubleM :: RandomState s Vec3
 randomVec3DoubleM = do
-  gRef <- get
+  gRef <- getGenRef
   gen <- lift $ readSTRef gRef
   let (x, g1) = randomDouble gen
   let (y, g2) = randomDouble g1
@@ -301,7 +307,7 @@ randomVec3DoubleRM min max = do
 
 randomInUnitSphereM :: RandomState s Vec3
 randomInUnitSphereM = do
-  gRef <- get
+  gRef <- getGenRef
   gen <- lift $ readSTRef gRef
   let (rUnit, gen1) = randomInUnitSphere gen
   lift $ writeSTRef gRef gen1
@@ -319,7 +325,7 @@ randomInUnitSphere gen =
 
 randomInUnitDiskM :: RandomState s Vec3
 randomInUnitDiskM = do
-  gRef <- get
+  gRef <- getGenRef
   gen <- lift $ readSTRef gRef
   let (rUnit, gen1) = randomInUnitDisk gen
   lift $ writeSTRef gRef gen1
@@ -336,7 +342,7 @@ randomInUnitDisk gen =
 
 randomUnitVectorM :: RandomState s Vec3
 randomUnitVectorM = do
-  gRef <- get
+  gRef <- getGenRef
   gen <- lift $ readSTRef gRef
   let (aa, g1) = randomDouble gen
   let a = aa * 2 * pi
@@ -411,12 +417,13 @@ rayColor r depth = rayColorHelp r depth (Attenuation $ Vec3 (1.0, 1.0, 1.0))
   where
     rayColorHelp :: Ray -> Int -> Attenuation -> RayTracingM s Vec3
     rayColorHelp r depth (Attenuation att_acc) = do
-      htbls <- ask
+      worldRef <- getWorldRef
+      htbls <- lift $ readSTRef worldRef
       if depth <= 0
         then return (Vec3 (0.0, 0.0, 0.0))
         else case hitList htbls r 0.001 infinity of
                Just h -> do
-                 mscatter <- lift $ scatter (hit_material h) r h
+                 mscatter <- scatter (hit_material h) r h
                  case mscatter of
                    Just (sray, Attenuation att) ->
                      rayColorHelp
@@ -434,14 +441,14 @@ rayColor r depth = rayColorHelp r depth (Attenuation $ Vec3 (1.0, 1.0, 1.0))
 
 sampleColor :: (Int, Int) -> Vec3 -> Int -> RayTracingM s Vec3
 sampleColor (x, y) accCol _ = do
-  gRef <- lift $ get
-  gen <- lift $ lift $ readSTRef gRef
+  gRef <- getGenRef
+  gen <- lift $ readSTRef gRef
   let (ru, g1) = randomDouble gen
   let (rv, g2) = randomDouble g1
   let u = (fromIntegral x + ru) / fromIntegral imageWidth
   let v = (fromIntegral y + rv) / fromIntegral imageHeight
-  r <- lift $ getRay defaultCamera u v
-  lift $ lift $ writeSTRef gRef g2
+  r <- getRay defaultCamera u v
+  lift $ writeSTRef gRef g2
   c1 <- rayColor r maxDepth
   return $ accCol `vecAdd` c1
 
@@ -467,10 +474,12 @@ someFunc = do
   let vals =
         runST $ do
           gRef <- newSTRef g1
-          mapM (\rm -> evalStateT (runReaderT (renderRow rm) world) gRef) pp
-  mapM_
-    printRow
-    (zip [1..imageHeight] vals)
+          worldRef <- newSTRef world
+          mapM
+            (\rm ->
+               runReaderT (renderRow rm) (worldRef, gRef))
+            pp
+  mapM_ printRow (zip [1 .. imageHeight] vals)
   hPutStr stderr "\nDone.\n"
 
 -- |Generate the image from the cover of the book with lots of spheres
@@ -478,7 +487,8 @@ makeWorld :: PureMT -> (World, PureMT)
 makeWorld gen =
   runST $ do
     gRef <- newSTRef gen
-    world <- evalStateT makeWorldM gRef
+    worldRef <- newSTRef []
+    world <- runReaderT makeWorldM (worldRef, gRef)
     g1 <- readSTRef gRef
     return (world, g1)
   where
