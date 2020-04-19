@@ -392,15 +392,15 @@ defaultCamera =
     20.0
     (fromIntegral imageWidth / fromIntegral imageHeight)
     0.1
+    10.0
 
-newCamera :: XYZ -> XYZ -> XYZ -> Double -> Double -> Double ->  Camera
-newCamera lookfrom lookat vup vfov aspect aperture =
+newCamera :: XYZ -> XYZ -> XYZ -> Double -> Double -> Double -> Double -> Camera
+newCamera lookfrom lookat vup vfov aspect aperture focusDist =
   let lensRadius = aperture / 2.0
       theta = vfov * pi / 180.0
       halfHeight = tan (theta / 2.0)
       halfWidth = aspect * halfHeight
       origin = lookfrom
-      focusDist = Lib.length (lookfrom `vecSub` lookat)
       w = makeUnitVector (lookfrom `vecSub` lookat)
       u = makeUnitVector (cross vup w)
       v = cross w u
