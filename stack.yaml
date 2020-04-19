@@ -48,7 +48,7 @@ packages:
 # extra-package-dbs: []
 
 ghc-options:
-  "$everything": -O2 -fexcess-precision -optc-O3 -optc-mfpmath=sse
+  "$everything": -O2 -fexcess-precision -optc-ffast-math
 
 # Control whether we use the GHC we find on the path
 # system-ghc: true
