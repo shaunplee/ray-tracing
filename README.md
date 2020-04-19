@@ -74,3 +74,43 @@ destructuring:
     Executed in   19.41 mins   fish           external
        usr time  1141.58 secs  148.00 micros  1141.58 secs
        sys time   29.44 secs  1105.00 micros   29.44 secs
+
+destructuring and ST:
+    time stack run > testrandomSTDetypeclass.ppm
+    Rendering row 400 of 400
+    Done.
+
+    ________________________________________________________
+    Executed in   17.69 mins   fish           external
+       usr time  1162.89 secs  123.00 micros  1162.89 secs
+       sys time   38.63 secs  794.00 micros   38.63 secs
+
+destructing and ST and -optc-ffast-math
+    time stack run > testrandomSTDetypeclassFfastMath.ppm
+    Rendering row 400 of 400
+    Done.
+
+    ________________________________________________________
+    Executed in   18.39 mins   fish           external
+       usr time  1184.28 secs  141.00 micros  1184.28 secs
+       sys time   43.23 secs  958.00 micros   43.23 secs
+
+destructuring and ST and -optc-ffast-math and -optc-O3
+    time stack run > testrandomSTDetypeclassFfastMathO3.ppm
+    Rendering row 400 of 400
+    Done.
+
+    ________________________________________________________
+    Executed in   20.16 mins   fish           external
+       usr time  1246.96 secs  135.00 micros  1246.96 secs
+       sys time   50.38 secs  858.00 micros   50.38 secs
+
+destructuring and lazy ST and -optc-ffast-math (lower RAM usage ~4MB)
+    time stack run > testrandomLazyST.ppm
+    Rendering row 400 of 400
+    Done.
+
+    ________________________________________________________
+    Executed in   20.24 mins   fish           external
+       usr time  1228.66 secs  171.00 micros  1228.66 secs
+       sys time   32.38 secs  1159.00 micros   32.38 secs
