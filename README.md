@@ -104,3 +104,13 @@ destructuring and ST and -optc-ffast-math and -optc-O3
     Executed in   20.16 mins   fish           external
        usr time  1246.96 secs  135.00 micros  1246.96 secs
        sys time   50.38 secs  858.00 micros   50.38 secs
+
+destructuring and lazy ST and -optc-ffast-math (lower RAM usage ~4MB)
+    time stack run > testrandomLazyST.ppm
+    Rendering row 400 of 400
+    Done.
+
+    ________________________________________________________
+    Executed in   20.24 mins   fish           external
+       usr time  1228.66 secs  171.00 micros  1228.66 secs
+       sys time   32.38 secs  1159.00 micros   32.38 secs

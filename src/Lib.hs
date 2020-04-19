@@ -8,14 +8,13 @@ module Lib
 import           Control.Applicative           ((<$>))
 import           Control.Monad                 (foldM)
 import           Control.Monad.Reader
-import           Control.Monad.ST              (ST (..), runST)
+import           Control.Monad.ST.Lazy         (ST (..), runST)
 import           Control.Monad.Trans           (lift)
-import           Control.Monad.Trans.State     (StateT (..), evalStateT, get,
-                                                put, runStateT)
+import           Control.Monad.Trans.State     (StateT (..), evalStateT, get)
 import           Data.Foldable                 (foldl')
 import           Data.List                     (intercalate)
 import           Data.Maybe                    (catMaybes)
-import           Data.STRef
+import           Data.STRef.Lazy
 import           Data.Word                     (Word8)
 import           System.IO                     (hPutStr, stderr)
 import           System.Random.Mersenne.Pure64
@@ -452,7 +451,7 @@ renderPos (x, y) = do
   return $ scaleColors (divide summedColor (fromIntegral ns))
 
 renderRow :: [(Int, Int)] -> RayTracingM s [RGB]
-renderRow ps = mapM renderPos ps
+renderRow = mapM renderPos
 
 pixelPositions :: Int -> Int -> [[(Int, Int)]]
 pixelPositions nx ny = map (\y -> map (, y) [0 .. nx - 1]) [ny - 1,ny - 2 .. 0]
@@ -465,17 +464,13 @@ someFunc = do
   let pp = pixelPositions imageWidth imageHeight
   gen <- newPureMT
   let (world, g1) = makeWorld gen
-  let vals = zip [1 .. imageHeight] pp
+  let vals =
+        runST $ do
+          gRef <- newSTRef g1
+          mapM (\rm -> evalStateT (runReaderT (renderRow rm) world) gRef) pp
   mapM_
-    (printRow .
-     (\(i, rm) ->
-        let r :: [RGB]
-            r =
-              runST $ do
-                gRef <- newSTRef g1
-                evalStateT (runReaderT (renderRow rm) world) gRef
-         in (i, r)))
-    vals
+    printRow
+    (zip [1..imageHeight] vals)
   hPutStr stderr "\nDone.\n"
 
 -- |Generate the image from the cover of the book with lots of spheres
