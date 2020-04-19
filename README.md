@@ -66,6 +66,7 @@ with -optc-ffast-math, without -fexcess-precision
        sys time   46.46 secs   14.31 millis   46.45 secs
 
 destructuring:
+
     time stack run > testrandomDestructured.ppm
     Rendering row 400 of 400
     Done.
@@ -76,6 +77,7 @@ destructuring:
        sys time   29.44 secs  1105.00 micros   29.44 secs
 
 destructuring and ST:
+
     time stack run > testrandomSTDetypeclass.ppm
     Rendering row 400 of 400
     Done.
@@ -86,6 +88,7 @@ destructuring and ST:
        sys time   38.63 secs  794.00 micros   38.63 secs
 
 destructing and ST and -optc-ffast-math
+
     time stack run > testrandomSTDetypeclassFfastMath.ppm
     Rendering row 400 of 400
     Done.
@@ -96,6 +99,7 @@ destructing and ST and -optc-ffast-math
        sys time   43.23 secs  958.00 micros   43.23 secs
 
 destructuring and ST and -optc-ffast-math and -optc-O3
+
     time stack run > testrandomSTDetypeclassFfastMathO3.ppm
     Rendering row 400 of 400
     Done.
@@ -106,6 +110,7 @@ destructuring and ST and -optc-ffast-math and -optc-O3
        sys time   50.38 secs  858.00 micros   50.38 secs
 
 destructuring and lazy ST and -optc-ffast-math (lower RAM usage ~4MB)
+
     time stack run > testrandomLazyST.ppm
     Rendering row 400 of 400
     Done.
@@ -114,3 +119,14 @@ destructuring and lazy ST and -optc-ffast-math (lower RAM usage ~4MB)
     Executed in   20.24 mins   fish           external
        usr time  1228.66 secs  171.00 micros  1228.66 secs
        sys time   32.38 secs  1159.00 micros   32.38 secs
+
+using ReaderT and lazy ST with -optc-ffast-math
+
+    time stack run > testrandomLazySTReader.ppm
+    Rendering row 400 of 400
+    Done.
+
+    ________________________________________________________
+    Executed in   18.55 mins   fish           external
+       usr time  1140.03 secs  132.00 micros  1140.03 secs
+       sys time   19.74 secs  896.00 micros   19.74 secs
