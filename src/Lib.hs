@@ -10,6 +10,8 @@ import           Control.Monad                 (foldM)
 import           Control.Monad.Reader
 import           Control.Monad.ST.Lazy         (ST (..), runST)
 import           Control.Monad.Trans           (lift)
+import           Control.Parallel
+import           Control.Parallel.Strategies   (Eval)
 import           Data.Foldable                 (foldl')
 import           Data.List                     (intercalate)
 import           Data.Maybe                    (catMaybes)
@@ -35,9 +37,9 @@ maxDepth = 50
 
 -- X and Y dimensions of output image
 imageWidth :: Int
-imageWidth = 600
+imageWidth = 100
 imageHeight :: Int
-imageHeight = 400
+imageHeight = 50
 
 infinity :: Double
 infinity = read "Infinity" :: Double

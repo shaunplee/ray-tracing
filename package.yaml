@@ -27,6 +27,7 @@ library:
   dependencies:
     - mtl
     - mersenne-random-pure64
+    - parallel
     - transformers
 
 executables:
