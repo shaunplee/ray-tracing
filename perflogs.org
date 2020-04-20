@@ -1,0 +1,83 @@
+All tests run with 600x400 images @ 100 samples and an initial seed of 1024.
+
+
+* ReaderT + Lazy ST + no typeclasses
+-O2 -fexcess-precision -optc-ffast-math
+
+Rendering row 400 of 400
+Done.
+
+________________________________________________________
+Executed in   17.40 mins   fish           external
+   usr time  1074.60 secs  142.00 micros  1074.60 secs
+   sys time   17.97 secs  1261.00 micros   17.97 secs
+
+
+ray-tracing on  master [!?] via λ v8.6.5 took 17m24s
+
+
+* ReaderT + Lazy ST + no typeclasses
+-O2 -fexcess-precision
+
+Rendering row 400 of 400
+Done.
+
+________________________________________________________
+Executed in   17.80 mins   fish           external
+   usr time  1088.73 secs  156.00 micros  1088.73 secs
+   sys time   20.27 secs  1028.00 micros   20.27 secs
+
+* ReaderT + Lazy ST + no typeclasses
+-O2 -fexcess-precision -optc-ffast-math -optc-march=broadwell -optc-msse2 -optc-mfpmath=sse
+
+Rendering row 400 of 400
+Done.
+
+________________________________________________________
+Executed in   18.23 mins   fish           external
+   usr time  1108.13 secs  158.00 micros  1108.13 secs
+   sys time   25.52 secs  977.00 micros   25.52 secs
+
+* ReaderT + Lazy ST + no typeclasses
+-O2 -fexcess-precision -optc-march=broadwell -optc-msse2 -optc-mfpmath=sse
+
+Rendering row 400 of 400
+Done.
+
+________________________________________________________
+Executed in   18.23 mins   fish           external
+   usr time  1104.20 secs  143.00 micros  1104.20 secs
+   sys time   23.52 secs  790.00 micros   23.52 secs
+
+* ReaderT + Lazy ST + no typeclasses
+-O2 -fexcess-precision -optc-ffast-math -optc-march=native
+
+Rendering row 400 of 400
+Done.
+
+________________________________________________________
+Executed in   18.68 mins   fish           external
+   usr time  1119.39 secs  156.00 micros  1119.39 secs
+   sys time   22.43 secs  1007.00 micros   22.43 secs
+
+* ReaderT + Lazy ST + no typeclasses
+-O2
+
+Rendering row 400 of 400
+Done.
+
+________________________________________________________
+Executed in   19.67 mins   fish           external
+   usr time  1143.93 secs  165.00 micros  1143.93 secs
+   sys time   27.37 secs  1127.00 micros   27.36 secs
+
+* ReaderT + Lazy ST + no typeclasses
+-O2 -fexcess-precision -optc-ffast-math -optc-O3
+
+Rendering row 400 of 400
+Done.
+
+________________________________________________________
+Executed in   19.69 mins   fish           external
+   usr time  1162.38 secs  180.00 micros  1162.38 secs
+   sys time   24.91 secs  1137.00 micros   24.91 secs

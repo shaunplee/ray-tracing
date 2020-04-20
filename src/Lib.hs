@@ -470,15 +470,13 @@ someFunc = do
   putStrLn "255"
   let pp = pixelPositions imageWidth imageHeight
   gen <- newPureMT
+  -- let gen = pureMT 1024 -- Fix a seed for comparable performance tests
   let (world, g1) = makeWorld gen
   let vals =
         runST $ do
           gRef <- newSTRef g1
           worldRef <- newSTRef world
-          mapM
-            (\rm ->
-               runReaderT (renderRow rm) (worldRef, gRef))
-            pp
+          mapM (\rm -> runReaderT (renderRow rm) (worldRef, gRef)) pp
   mapM_ printRow (zip [1 .. imageHeight] vals)
   hPutStr stderr "\nDone.\n"
 
