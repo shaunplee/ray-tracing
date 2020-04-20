@@ -18,9 +18,16 @@ import           Data.Word                     (Word8)
 import           System.IO                     (hPutStr, stderr)
 import           System.Random.Mersenne.Pure64
 
+-- Number of threads to use when rendering
+nThreads :: Int
+nThreads = 2
+
 -- Number of samples to use when anti-aliasing
 ns :: Int
-ns = 100
+ns = 50
+
+nsPerThread :: Int
+nsPerThread = ns `div` nThreads
 
 -- maximum number of reflections
 maxDepth :: Int
@@ -452,12 +459,13 @@ sampleColor (x, y) accCol _ = do
   c1 <- rayColor r maxDepth
   return $ accCol `vecAdd` c1
 
-renderPos :: (Int, Int) -> RayTracingM s RGB
+renderPos :: (Int, Int) -> RayTracingM s XYZ
 renderPos (x, y) = do
-  summedColor <- foldM (sampleColor (x, y)) (Vec3 (0.0, 0.0, 0.0)) [0 .. ns - 1]
-  return $ scaleColors (divide summedColor (fromIntegral ns))
+  summedColor <-
+    foldM (sampleColor (x, y)) (Vec3 (0.0, 0.0, 0.0)) [0 .. nsPerThread - 1]
+  return $ divide summedColor (fromIntegral ns)
 
-renderRow :: [(Int, Int)] -> RayTracingM s [RGB]
+renderRow :: [(Int, Int)] -> RayTracingM s [Vec3]
 renderRow = mapM renderPos
 
 pixelPositions :: Int -> Int -> [[(Int, Int)]]
@@ -474,11 +482,36 @@ someFunc = do
   let (world, g1) = makeWorld gen
   let vals =
         runST $ do
-          gRef <- newSTRef g1
           worldRef <- newSTRef world
-          mapM (\rm -> runReaderT (renderRow rm) (worldRef, gRef)) pp
+          gs <- mapM newSTRef (makeNPureMT g1 nThreads)
+          gRef <- newSTRef g1
+          mapM
+            (\rowPs ->
+               map scaleColors <$>
+               parallelRenderRow rowPs worldRef gs)
+            pp
   mapM_ printRow (zip [1 .. imageHeight] vals)
   hPutStr stderr "\nDone.\n"
+
+makeNPureMT :: PureMT -> Int -> [PureMT]
+makeNPureMT gen n =
+  let (_, ps) =
+        foldr
+          (\_ (g, gs) ->
+             let (newSeed, g1) = randomWord64 g
+              in (g1, pureMT newSeed : gs))
+          (gen, [])
+          [1 .. n]
+   in ps
+
+parallelRenderRow ::
+     [(Int, Int)] -> STRef s World -> [STRef s PureMT] -> ST s [Vec3]
+parallelRenderRow rowps worldRef =
+  foldM
+    (\acc genRef -> do
+       newRow <- runReaderT (renderRow rowps) (worldRef, genRef)
+       return $ zipWith vecAdd acc newRow)
+    (replicate imageWidth (Vec3 (0.0, 0.0, 0.0)))
 
 -- |Generate the image from the cover of the book with lots of spheres
 makeWorld :: PureMT -> (World, PureMT)
