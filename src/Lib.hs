@@ -6,12 +6,14 @@ module Lib
     ) where
 
 import           Control.Applicative           ((<$>))
+import           Control.DeepSeq               (NFData, force, rnf)
 import           Control.Monad                 (foldM)
 import           Control.Monad.Reader
 import           Control.Monad.ST.Lazy         (ST (..), runST)
 import           Control.Monad.Trans           (lift)
 import           Control.Parallel
-import           Control.Parallel.Strategies   (Eval)
+import           Control.Parallel.Strategies   (Eval, parMap, rpar, rseq,
+                                                runEval)
 import           Data.Foldable                 (foldl')
 import           Data.List                     (intercalate)
 import           Data.Maybe                    (catMaybes)
@@ -26,7 +28,7 @@ nThreads = 2
 
 -- Number of samples to use when anti-aliasing
 ns :: Int
-ns = 50
+ns = 100
 
 nsPerThread :: Int
 nsPerThread = ns `div` nThreads
@@ -37,9 +39,9 @@ maxDepth = 50
 
 -- X and Y dimensions of output image
 imageWidth :: Int
-imageWidth = 100
+imageWidth = 600
 imageHeight :: Int
-imageHeight = 50
+imageHeight = 400
 
 infinity :: Double
 infinity = read "Infinity" :: Double
@@ -69,6 +71,9 @@ instance Show RGB where
 type XYZ = Vec3
 
 newtype Vec3 = Vec3 (Double, Double, Double)
+
+instance NFData Vec3 where
+  rnf (Vec3 (x, y, z)) = rnf x `seq` rnf y `seq` rnf z
 
 vecX :: Vec3 -> Double
 vecX (Vec3 (x, _ , _)) = x
@@ -479,18 +484,18 @@ someFunc = do
   putStrLn $ show imageWidth ++ " " ++ show imageHeight
   putStrLn "255"
   let pp = pixelPositions imageWidth imageHeight
-  gen <- newPureMT
-  -- let gen = pureMT 1024 -- Fix a seed for comparable performance tests
+  --gen <- newPureMT
+  let gen = pureMT 1024 -- Fix a seed for comparable performance tests
   let (world, g1) = makeWorld gen
   let vals =
         runST $ do
           worldRef <- newSTRef world
-          gs <- mapM newSTRef (makeNPureMT g1 nThreads)
+          let gs = makeNPureMT g1 nThreads
           gRef <- newSTRef g1
           mapM
             (\rowPs ->
                map scaleColors <$>
-               parallelRenderRow rowPs worldRef gs)
+               parallelRenderRow rowPs world gs)
             pp
   mapM_ printRow (zip [1 .. imageHeight] vals)
   hPutStr stderr "\nDone.\n"
@@ -507,13 +512,19 @@ makeNPureMT gen n =
    in ps
 
 parallelRenderRow ::
-     [(Int, Int)] -> STRef s World -> [STRef s PureMT] -> ST s [Vec3]
-parallelRenderRow rowps worldRef =
-  foldM
-    (\acc genRef -> do
-       newRow <- runReaderT (renderRow rowps) (worldRef, genRef)
-       return $ zipWith vecAdd acc newRow)
-    (replicate imageWidth (Vec3 (0.0, 0.0, 0.0)))
+     [(Int, Int)] -> World -> [PureMT] -> ST s [Vec3]
+parallelRenderRow rowps world gs =
+  let sampleGroups =
+        parMap rpar
+          (\gen -> force $ runST $ do
+              worldRef <- newSTRef world
+              genRef <- newSTRef gen
+              runReaderT (renderRow rowps) (worldRef, genRef))
+          gs
+   in return $ foldr
+        (\acc sampleGroup -> zipWith vecAdd acc sampleGroup)
+        (replicate imageWidth (Vec3 (0.0, 0.0, 0.0)))
+        sampleGroups
 
 -- |Generate the image from the cover of the book with lots of spheres
 makeWorld :: PureMT -> (World, PureMT)

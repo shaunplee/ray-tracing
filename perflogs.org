@@ -1,6 +1,22 @@
 All tests run with 600x400 images @ 100 samples and an initial seed of 1024.
 
 
+* ReaderT + Lazy ST + no typeclasses + 2 cores
+-O2 -fexcess-precision -optc-ffast-math -threaded -rtsopts -eventlog
+
+Rendering row 400 of 400
+Done.
+
+________________________________________________________
+Executed in  617.61 secs   fish           external
+   usr time  1152.04 secs  175.00 micros  1152.04 secs
+   sys time    7.98 secs  1270.00 micros    7.97 secs
+
+** Notes
+This version may have had problems with randomness of the generators
+used in the two threads
+
+
 * ReaderT + Lazy ST + no typeclasses
 -O2 -fexcess-precision -optc-ffast-math
 
@@ -14,7 +30,6 @@ Executed in   17.40 mins   fish           external
 
 
 ray-tracing on  master [!?] via λ v8.6.5 took 17m24s
-
 
 * ReaderT + Lazy ST + no typeclasses
 -O2 -fexcess-precision
