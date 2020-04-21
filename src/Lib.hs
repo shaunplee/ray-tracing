@@ -12,8 +12,7 @@ import           Control.Monad.Reader
 import           Control.Monad.ST.Lazy         (ST (..), runST)
 import           Control.Monad.Trans           (lift)
 import           Control.Parallel
-import           Control.Parallel.Strategies   (Eval, parMap, rpar, rseq,
-                                                runEval)
+import           Control.Parallel.Strategies   (Eval, parMap, rpar)
 import           Data.Foldable                 (foldl')
 import           Data.List                     (intercalate)
 import           Data.Maybe                    (catMaybes)
@@ -487,16 +486,15 @@ someFunc = do
   --gen <- newPureMT
   let gen = pureMT 1024 -- Fix a seed for comparable performance tests
   let (world, g1) = makeWorld gen
+  gs <- replicateM (nThreads - 1) newPureMT
+  let gens = g1 : gs
   let vals =
-        runST $ do
-          worldRef <- newSTRef world
-          let gs = makeNPureMT g1 nThreads
-          gRef <- newSTRef g1
-          mapM
-            (\rowPs ->
-               map scaleColors <$>
-               parallelRenderRow rowPs world gs)
-            pp
+        runST $
+        mapM
+          (\rowPs ->
+             map scaleColors <$>
+             parallelRenderRow rowPs world gens)
+          pp
   mapM_ printRow (zip [1 .. imageHeight] vals)
   hPutStr stderr "\nDone.\n"
 
@@ -522,7 +520,7 @@ parallelRenderRow rowps world gs =
               runReaderT (renderRow rowps) (worldRef, genRef))
           gs
    in return $ foldr
-        (\acc sampleGroup -> zipWith vecAdd acc sampleGroup)
+        (zipWith vecAdd)
         (replicate imageWidth (Vec3 (0.0, 0.0, 0.0)))
         sampleGroups
 
