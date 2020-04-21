@@ -130,3 +130,13 @@ using ReaderT and lazy ST with -optc-ffast-math
     Executed in   18.55 mins   fish           external
        usr time  1140.03 secs  132.00 micros  1140.03 secs
        sys time   19.74 secs  896.00 micros   19.74 secs
+
+using 2 cores with ReaderT + Lazy ST + no typeclasses -O2 -fexcess-precision -optc-ffast-math -threaded -rtsopts -eventlog
+
+    Rendering row 400 of 400
+    Done.
+
+    ________________________________________________________
+    Executed in  617.61 secs   fish           external
+       usr time  1152.04 secs  175.00 micros  1152.04 secs
+       sys time    7.98 secs  1270.00 micros    7.97 secs
