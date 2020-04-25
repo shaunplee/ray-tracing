@@ -151,12 +151,13 @@ showRow row = unwords $ fmap show row
 
 
 data Ray = Ray
-  { origin    :: XYZ
-  , direction :: XYZ
+  { ray_origin    :: XYZ
+  , ray_direction :: XYZ
+  , ray_time      :: Double
   } deriving Show
 
 at :: Ray -> Double -> XYZ
-at (Ray or dr) t = or `vecAdd` scale t dr
+at (Ray or dr _) t = or `vecAdd` scale t dr
 
 data Hit = Hit
   { hit_t         :: Double
@@ -179,23 +180,43 @@ newtype Fuzz = Fuzz Double
 
 newtype RefractiveIdx = RefractiveIdx Double
 
-data Shape = Sphere
-  { sphere_center   :: Vec3
-  , sphere_radius   :: Double
-  , sphere_material :: Material
-  }
+data Shape
+  = Sphere { sphere_center   :: Vec3
+           , sphere_radius   :: Double
+           , sphere_material :: Material }
+  | MovingSphere { msphere_center0  :: Vec3
+                 , msphere_center1  :: Vec3
+                 , msphere_time0    :: Time
+                 , msphere_time1    :: Time
+                 , msphere_radius   :: Double
+                 , msphere_material :: Material}
+
+type Time = Double
+
+sph_center :: Shape -> Double -> Vec3
+sph_center (Sphere c r _) _ = c
+sph_center (MovingSphere c0 c1 t0 t1 r m) t =
+  c0 `vecAdd` scale ((t - t0) / (t1 - t0)) (c1 `vecSub` c0)
+
+sph_radius :: Shape -> Double
+sph_radius (Sphere _ r _)             = r
+sph_radius (MovingSphere _ _ _ _ r _) = r
+
+sph_material :: Shape -> Material
+sph_material (Sphere _ _ m)             = m
+sph_material (MovingSphere _ _ _ _ _ m) = m
 
 scatter :: Material -> Ray -> Hit -> RandomState s (Maybe (Ray, Attenuation))
 scatter (Lambertian att) rin (Hit _ hp hn _ _) = do
   rUnit <- randomUnitVectorM
   let scatterDirection = hn `vecAdd` rUnit
-  let scattered = Ray hp scatterDirection
+  let scattered = Ray hp scatterDirection (ray_time rin)
   return $ Just (scattered, att)
 scatter (Metal att (Fuzz fuzz)) rin (Hit _ hp hn _ _) = do
   rUnit <- randomUnitVectorM
-  let reflected = reflect (makeUnitVector (direction rin)) hn
-  let scattered = Ray hp (reflected `vecAdd` scale fuzz rUnit)
-  return $ if dot (direction scattered) hn > 0.0
+  let reflected = reflect (makeUnitVector (ray_direction rin)) hn
+  let scattered = Ray hp (reflected `vecAdd` scale fuzz rUnit) (ray_time rin)
+  return $ if dot (ray_direction scattered) hn > 0.0
            then Just (scattered, att)
            else Nothing
 scatter (Dielectric (RefractiveIdx ref_idx)) rin (Hit _ hp hn hff _) = do
@@ -204,17 +225,17 @@ scatter (Dielectric (RefractiveIdx ref_idx)) rin (Hit _ hp hn hff _) = do
         if hff
           then 1.0 / ref_idx
           else ref_idx
-  let unitDirection = makeUnitVector (direction rin)
+  let unitDirection = makeUnitVector (ray_direction rin)
   let cosTheta = min (dot (vecNegate unitDirection) hn) 1.0
   let sinTheta = sqrt (1.0 - cosTheta * cosTheta)
   rd <- randomDoubleM
   return $
     if (etaiOverEtat * sinTheta > 1.0) || rd < schlick cosTheta etaiOverEtat
       then let reflected = reflect unitDirection hn
-            in Just (Ray hp reflected, Attenuation attenuation)
+            in Just (Ray hp reflected (ray_time rin), Attenuation attenuation)
       else let refracted =
                  refract unitDirection hn etaiOverEtat
-            in Just (Ray hp refracted, Attenuation attenuation)
+            in Just (Ray hp refracted (ray_time rin), Attenuation attenuation)
 
 reflect :: XYZ -> XYZ -> XYZ
 reflect v n = v `vecSub` scale (2.0 * dot v n) n
@@ -235,8 +256,10 @@ schlick cos ref_idx =
    in r1 + (1.0 - r1) * (1 - cos) ** 5
 
 hit :: Shape -> Ray -> Double -> Double -> Maybe Hit
-hit sphere@(Sphere sc sr _) r@(Ray or dr) t_min t_max =
-  let oc = or `vecSub` sc
+hit sphere r@(Ray or dr tm) t_min t_max =
+  let sc = sph_center sphere tm
+      sr = sph_radius sphere
+      oc = or `vecSub` sc
       a = dot dr dr
       b = seq oc (dot oc dr)
       c = seq sr (dot oc oc - (sr * sr))
@@ -253,8 +276,11 @@ hit sphere@(Sphere sc sr _) r@(Ray or dr) t_min t_max =
         else Nothing
 
 recHit :: Double -> Ray -> Shape -> Hit
-recHit temp r@(Ray or dr) sphere@(Sphere sc sr sm) =
-  let p = r `at` temp
+recHit temp r@(Ray or dr tm) sphere =
+  let sc = sph_center sphere tm
+      sr = sph_radius sphere
+      sm = sph_material sphere
+      p = r `at` temp
       outwardNormal = divide (p `vecSub` sc) sr
       frontFace = dot dr outwardNormal < 0.0
       n =
@@ -276,7 +302,7 @@ hitList htbls r t_min t_max =
     htbls
 
 hitSphere :: XYZ -> Double -> Ray -> Double
-hitSphere center radius ray@(Ray or dr) =
+hitSphere center radius ray@(Ray or dr _) =
   let oc = or `vecSub` center
       a = dot dr dr
       b = 2.0 * dot oc dr
@@ -381,6 +407,8 @@ data Camera = Camera
   , camera_v          :: XYZ
   , camera_w          :: XYZ
   , camera_lensRadius :: Double
+  , camera_t0         :: Double
+  , camera_t1         :: Double
   }
 
 getRay :: Camera -> Double -> Double -> RandomState s Ray
@@ -388,6 +416,7 @@ getRay c s t = do
   rd <- fmap (scale $ camera_lensRadius c) randomInUnitDiskM
   let offset =
         scale (vecX rd) (camera_u c) `vecAdd` scale (vecY rd) (camera_v c)
+  tm <- randomDoubleRM (camera_t0 c) (camera_t1 c)
   return $
     Ray
       (camera_origin c `vecAdd` offset)
@@ -395,6 +424,7 @@ getRay c s t = do
        scale t (camera_vert c) `vecSub`
        camera_origin c `vecSub`
        offset)
+      tm
 
 defaultCamera :: Camera
 defaultCamera =
@@ -406,9 +436,21 @@ defaultCamera =
     (fromIntegral imageWidth / fromIntegral imageHeight)
     0.1
     10.0
+    0.0
+    1.0
 
-newCamera :: XYZ -> XYZ -> XYZ -> Double -> Double -> Double -> Double -> Camera
-newCamera lookfrom lookat vup vfov aspect aperture focusDist =
+newCamera ::
+     XYZ
+  -> XYZ
+  -> XYZ
+  -> Double
+  -> Double
+  -> Double
+  -> Double
+  -> Double
+  -> Double
+  -> Camera
+newCamera lookfrom lookat vup vfov aspect aperture focusDist t0 t1 =
   let lensRadius = aperture / 2.0
       theta = vfov * pi / 180.0
       halfHeight = tan (theta / 2.0)
@@ -423,7 +465,7 @@ newCamera lookfrom lookat vup vfov aspect aperture focusDist =
         scale focusDist w
       horizontal = scale (2 * halfWidth * focusDist) u
       vertical = scale (2 * halfHeight * focusDist) v
-   in Camera origin lowerLeftCorner horizontal vertical u v w lensRadius
+   in Camera origin lowerLeftCorner horizontal vertical u v w lensRadius t0 t1
 
 rayColor :: Ray -> Int -> RayTracingM s Vec3
 rayColor r depth = rayColorHelp r depth (Attenuation $ Vec3 (1.0, 1.0, 1.0))
