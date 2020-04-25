@@ -498,17 +498,6 @@ someFunc = do
   mapM_ printRow (zip [1 .. imageHeight] vals)
   hPutStr stderr "\nDone.\n"
 
-makeNPureMT :: PureMT -> Int -> [PureMT]
-makeNPureMT gen n =
-  let (_, ps) =
-        foldr
-          (\_ (g, gs) ->
-             let (newSeed, g1) = randomWord64 g
-              in (g1, pureMT newSeed : gs))
-          (gen, [])
-          [1 .. n]
-   in ps
-
 parallelRenderRow ::
      [(Int, Int)] -> World -> [PureMT] -> ST s [Vec3]
 parallelRenderRow rowps world gs =
