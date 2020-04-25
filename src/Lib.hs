@@ -487,7 +487,7 @@ rayColor r depth = rayColorHelp r depth (Attenuation $ Vec3 (1.0, 1.0, 1.0))
                        (Attenuation (att_acc `vecMul` att))
                    Nothing -> return $ Vec3 (0.0, 0.0, 0.0)
                Nothing ->
-                 let unitDirection = makeUnitVector (direction r)
+                 let unitDirection = makeUnitVector (ray_direction r)
                      t = 0.5 * (vecY unitDirection + 1.0)
                   in return $
                      att_acc `vecMul`
@@ -600,10 +600,17 @@ makeWorld gen =
                  ->
                   do a1 <- randomVec3DoubleM
                      a2 <- randomVec3DoubleM
+                     sph_height <- randomDoubleRM 0 0.5
                      let albedo = a1 `vecMul` a2
                      return $
                        Just $
-                       Sphere center 0.2 (Lambertian (Attenuation albedo))
+                       MovingSphere
+                         center
+                         (center `vecAdd` Vec3 (0, sph_height, 0))
+                         0.0
+                         1.0
+                         0.2
+                         (Lambertian (Attenuation albedo))
                 | mat < 0.95 -- Metal
                  ->
                   do albedo <- randomVec3DoubleRM 0.5 1.0
