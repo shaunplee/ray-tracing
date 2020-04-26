@@ -713,13 +713,14 @@ makeScene t0 t1 gen =
                  ->
                   do a1 <- randomVec3DoubleM
                      a2 <- randomVec3DoubleM
-                     sph_height <- randomDoubleRM 0 0.5
+                     sph_move_x <- randomDoubleRM (-0.25) 0.25
+                     sph_move_z <- randomDoubleRM (-0.25) 0.25
                      let albedo = a1 `vecMul` a2
                      return $
                        Just $
                        MovingSphere
                          center
-                         (center `vecAdd` Vec3 (0, sph_height, 0))
+                         (center `vecAdd` Vec3 (sph_move_x, 0, sph_move_z))
                          0.0
                          1.0
                          0.2
