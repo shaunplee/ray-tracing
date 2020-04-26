@@ -308,7 +308,6 @@ surroundingBox (Box b0min b0max) (Box b1min b1max) =
       big = Vec3 (max b0max_x b1max_x, max b0max_y b1max_y, max b0max_z b1max_z)
    in Box small big
 
-
 makeBVH :: Time -> Time -> Seq Hittable -> RandomState s Hittable
 makeBVH t0 t1 htbls = do
   axis <- floor <$> randomDoubleRM 0 3
@@ -347,33 +346,15 @@ hit (BVHNode bvh_l bvh_r box) r@(Ray or dr tm) t_min t_max =
         Nothing -> hit bvh_r r t_min t_max -- no hits, try right branch
         Just hitLeft@(Hit t _ _ _ _) -> -- left branch hit
           case hit bvh_r r t_min t of -- is there a closer right branch hit?
-            Nothing       -> Just hitLeft -- no, then take the left branch hit
-            Just hitRight -> Just hitRight -- yes, take the right
-                                           -- branch hit
+            Nothing       -> Just hitLeft -- no, take hit from left branch
+            Just hitRight -> Just hitRight -- yes, take hit from right branch
 hit (Aabb bb_min bb_max) r@(Ray or dr tm) t_min t_max =
   foldr
     (\cur_axis mh ->
        case mh of
          Nothing -> Nothing
          _ ->
-           let -- invD = 1.0 / cur_axis dr -- faster method from Listing 9
-               -- t0 = (cur_axis bb_min - cur_axis or) * invD
-               -- t1 = (cur_axis bb_max - cur_axis or) * invD
-               -- (t0_a, t1_a) =
-               --   if invD < 0.0
-               --     then (t1, t0)
-               --     else (t0, t1)
-               -- tmin =
-               --   if t0 > t_min
-               --     then t0
-               --     else t_min
-               -- tmax =
-               --   if t1 < t_max
-               --     then t1
-               --     else t_max
-               -- end faster method from Listing 9
-               -- original method from Listing 8
-               c_or = cur_axis or
+           let c_or = cur_axis or
                c_dr = cur_axis dr
                c_bb_min = cur_axis bb_min
                c_bb_max = cur_axis bb_max
@@ -381,7 +362,6 @@ hit (Aabb bb_min bb_max) r@(Ray or dr tm) t_min t_max =
                t1 = max ((c_bb_min - c_or) / c_dr) ((c_bb_max - c_or) / c_dr)
                tmin = max t0 t_min
                tmax = min t1 t_max
-               -- end original method from Listing 8
             in if tmax <= tmin
                  then Nothing
                  else mh)
