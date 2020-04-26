@@ -16,6 +16,8 @@ import           Control.Parallel.Strategies   (Eval, parMap, rpar)
 import           Data.Foldable                 (foldl')
 import           Data.List                     (intercalate)
 import           Data.Maybe                    (catMaybes)
+import           Data.Sequence                 (Seq (..))
+import qualified Data.Sequence                 as S
 import           Data.STRef.Lazy
 import           Data.Word                     (Word8)
 import           System.IO                     (hPutStr, stderr)
@@ -45,17 +47,18 @@ imageHeight = 400
 infinity :: Double
 infinity = read "Infinity" :: Double
 
-type World = [Shape]
+-- A scene should be a BVHNode, which is a Hittable
+type Scene = Hittable
 
 -- Use the ST monad to thread the random number generator
-type RandomState s = ReaderT (STRef s World, STRef s PureMT) (ST s)
+type RandomState s = ReaderT (STRef s Scene, STRef s PureMT) (ST s)
 
 getGenRef :: RandomState s (STRef s PureMT)
 getGenRef = do (_, genRef) <- ask
                return genRef
 
-getWorldRef :: RandomState s (STRef s World)
-getWorldRef = do (worldRef, _) <- ask
+getSceneRef :: RandomState s (STRef s Scene)
+getSceneRef = do (worldRef, _) <- ask
                  return worldRef
 
 type RayTracingM s = RandomState s
@@ -169,18 +172,31 @@ data Hit = Hit
   , hit_material  :: Material
   }
 
+emptyHit :: Hit
+emptyHit =
+  Hit
+    0
+    (Vec3 (-1.0, -1.0, -1.0))
+    (Vec3 (0.0, 0.0, 0.0))
+    False
+    (Dielectric (RefractiveIdx 0.0))
+
 data Material
   = Lambertian Attenuation
   | Metal Attenuation Fuzz
   | Dielectric RefractiveIdx
+  deriving Show
 
 newtype Attenuation = Attenuation Vec3
+  deriving Show
 
 newtype Fuzz = Fuzz Double
+  deriving Show
 
 newtype RefractiveIdx = RefractiveIdx Double
+  deriving Show
 
-data Shape
+data Hittable
   = Sphere { sphere_center   :: Vec3
            , sphere_radius   :: Double
            , sphere_material :: Material }
@@ -189,22 +205,36 @@ data Shape
                  , msphere_time0    :: Time
                  , msphere_time1    :: Time
                  , msphere_radius   :: Double
-                 , msphere_material :: Material}
+                 , msphere_material :: Material }
+  | Aabb { aabb_min :: Vec3
+         , aabb_max :: Vec3 }
+  | BVHNode {bvh_left   :: Hittable
+            , bvh_right :: Hittable
+            , bvh_box   :: Box}
+    deriving Show
+
+data Box = Box
+  { box_min :: Vec3
+  , box_max :: Vec3
+  } deriving (Show)
+
+boxToAabb :: Box -> Hittable
+boxToAabb (Box bmin bmax) = Aabb bmin bmax
 
 type Time = Double
 
-sph_center :: Shape -> Double -> Vec3
-sph_center (Sphere c r _) _ = c
-sph_center (MovingSphere c0 c1 t0 t1 r m) t =
+sphCenter :: Hittable -> Double -> Vec3
+sphCenter (Sphere c r _) _ = c
+sphCenter (MovingSphere c0 c1 t0 t1 r m) t =
   c0 `vecAdd` scale ((t - t0) / (t1 - t0)) (c1 `vecSub` c0)
 
-sph_radius :: Shape -> Double
-sph_radius (Sphere _ r _)             = r
-sph_radius (MovingSphere _ _ _ _ r _) = r
+sphRadius :: Hittable -> Double
+sphRadius (Sphere _ r _)             = r
+sphRadius (MovingSphere _ _ _ _ r _) = r
 
-sph_material :: Shape -> Material
-sph_material (Sphere _ _ m)             = m
-sph_material (MovingSphere _ _ _ _ _ m) = m
+sphMaterial :: Hittable -> Material
+sphMaterial (Sphere _ _ m)             = m
+sphMaterial (MovingSphere _ _ _ _ _ m) = m
 
 scatter :: Material -> Ray -> Hit -> RandomState s (Maybe (Ray, Attenuation))
 scatter (Lambertian att) rin (Hit _ hp hn _ _) = do
@@ -255,10 +285,111 @@ schlick cos ref_idx =
       r1 = r0 * r0
    in r1 + (1.0 - r1) * (1 - cos) ** 5
 
-hit :: Shape -> Ray -> Double -> Double -> Maybe Hit
+boundingBox :: Hittable -> Double -> Double -> Box
+boundingBox (Sphere c r _) _ _ =
+  let rad = Vec3 (r, r, r)
+   in Box (c `vecSub` rad) (c `vecAdd` rad)
+boundingBox (MovingSphere c0 c1 ms_t0 ms_t1 r _) t0 t1 =
+  let rad = Vec3 (r, r, r)
+      box0 = Box (c0 `vecSub` rad) (c0 `vecAdd` rad)
+      box1 = Box (c1 `vecSub` rad) (c1 `vecAdd` rad)
+   in surroundingBox box0 box1
+boundingBox (Aabb ab_min ab_max) _ _ = Box ab_min ab_max
+boundingBox (BVHNode _ _ box) _ _ = box
+
+surroundingBox :: Box -> Box -> Box
+surroundingBox (Box b0min b0max) (Box b1min b1max) =
+  let (Vec3 (b0min_x, b0min_y, b0min_z)) = b0min
+      (Vec3 (b0max_x, b0max_y, b0max_z)) = b0max
+      (Vec3 (b1min_x, b1min_y, b1min_z)) = b1min
+      (Vec3 (b1max_x, b1max_y, b1max_z)) = b1max
+      small =
+        Vec3 (min b0min_x b1min_x, min b0min_y b1min_y, min b0min_z b1min_z)
+      big = Vec3 (max b0max_x b1max_x, max b0max_y b1max_y, max b0max_z b1max_z)
+   in Box small big
+
+
+makeBVH :: Time -> Time -> Seq Hittable -> RandomState s Hittable
+makeBVH t0 t1 htbls = do
+  axis <- floor <$> randomDoubleRM 0 3
+  let comparator = boxCompare ([vecX, vecY, vecZ] !! axis) t0 t1
+  let objectSpan = S.length htbls
+  (bvh_lt, bvh_rt) <-
+    case htbls of
+      h :<| Empty -> return (h, h)
+      h1 :<| h2 :<| Empty ->
+        case comparator h1 h2 of
+          LT -> return (h1, h2)
+          _  -> return (h2, h1)
+      _ -> do
+        let (lt_htbls, rt_htbls) =
+              S.splitAt (objectSpan `div` 2) (S.sortBy comparator htbls)
+        lt <- makeBVH t0 t1 lt_htbls
+        rt <- makeBVH t0 t1 rt_htbls
+        return (lt, rt)
+  let bvh_bx =
+        surroundingBox (boundingBox bvh_lt t0 t1) (boundingBox bvh_rt t0 t1)
+  return (BVHNode bvh_lt bvh_rt bvh_bx)
+
+boxCompare ::
+     (Vec3 -> Double) -> Time -> Time -> Hittable -> Hittable -> Ordering
+boxCompare compAxis t0 t1 boxa boxb =
+  compare
+    (compAxis (box_min (boundingBox boxa t0 t1)))
+    (compAxis (box_min (boundingBox boxb t0 t1)))
+
+hit :: Hittable -> Ray -> Double -> Double -> Maybe Hit
+hit (BVHNode bvh_l bvh_r box) r@(Ray or dr tm) t_min t_max =
+  case hit (boxToAabb box) r t_min t_max of
+    Nothing -> Nothing
+    Just _ ->
+      case hit bvh_l r t_min t_max of -- try to hit left branch
+        Nothing -> hit bvh_r r t_min t_max -- no hits, try right branch
+        Just hitLeft@(Hit t _ _ _ _) -> -- left branch hit
+          case hit bvh_r r t_min t of -- is there a closer right branch hit?
+            Nothing       -> Just hitLeft -- no, then take the left branch hit
+            Just hitRight -> Just hitRight -- yes, take the right
+                                           -- branch hit
+hit (Aabb bb_min bb_max) r@(Ray or dr tm) t_min t_max =
+  foldr
+    (\cur_axis mh ->
+       case mh of
+         Nothing -> Nothing
+         _ ->
+           let -- invD = 1.0 / cur_axis dr -- faster method from Listing 9
+               -- t0 = (cur_axis bb_min - cur_axis or) * invD
+               -- t1 = (cur_axis bb_max - cur_axis or) * invD
+               -- (t0_a, t1_a) =
+               --   if invD < 0.0
+               --     then (t1, t0)
+               --     else (t0, t1)
+               -- tmin =
+               --   if t0 > t_min
+               --     then t0
+               --     else t_min
+               -- tmax =
+               --   if t1 < t_max
+               --     then t1
+               --     else t_max
+               -- end faster method from Listing 9
+               -- original method from Listing 8
+               c_or = cur_axis or
+               c_dr = cur_axis dr
+               c_bb_min = cur_axis bb_min
+               c_bb_max = cur_axis bb_max
+               t0 = min ((c_bb_min - c_or) / c_dr) ((c_bb_max - c_or) / c_dr)
+               t1 = max ((c_bb_min - c_or) / c_dr) ((c_bb_max - c_or) / c_dr)
+               tmin = max t0 t_min
+               tmax = min t1 t_max
+               -- end original method from Listing 8
+            in if tmax <= tmin
+                 then Nothing
+                 else mh)
+    (Just emptyHit)
+    [vecX, vecY, vecZ]
 hit sphere r@(Ray or dr tm) t_min t_max =
-  let sc = sph_center sphere tm
-      sr = sph_radius sphere
+  let sc = sphCenter sphere tm
+      sr = sphRadius sphere
       oc = or `vecSub` sc
       a = dot dr dr
       b = seq oc (dot oc dr)
@@ -275,11 +406,11 @@ hit sphere r@(Ray or dr tm) t_min t_max =
                     | otherwise -> Nothing
         else Nothing
 
-recHit :: Double -> Ray -> Shape -> Hit
+recHit :: Double -> Ray -> Hittable -> Hit
 recHit temp r@(Ray or dr tm) sphere =
-  let sc = sph_center sphere tm
-      sr = sph_radius sphere
-      sm = sph_material sphere
+  let sc = sphCenter sphere tm
+      sr = sphRadius sphere
+      sm = sphMaterial sphere
       p = r `at` temp
       outwardNormal = divide (p `vecSub` sc) sr
       frontFace = dot dr outwardNormal < 0.0
@@ -289,17 +420,17 @@ recHit temp r@(Ray or dr tm) sphere =
           else vecNegate outwardNormal
    in Hit temp p n frontFace sm
 
-hitList :: [Shape] -> Ray -> Double -> Double -> Maybe Hit
-hitList htbls r t_min t_max =
-  foldl'
-    (\mh htbl ->
-       case mh of
-         Nothing -> hit htbl r t_min t_max
-         Just (Hit ht _ _ _ _)  -> case hit htbl r t_min ht of
-           Nothing -> mh
-           h1      -> h1)
-    Nothing
-    htbls
+-- hitList :: Scene -> Ray -> Double -> Double -> Maybe Hit
+-- hitList htbls r t_min t_max =
+--   foldl'
+--     (\mh htbl ->
+--        case mh of
+--          Nothing -> hit htbl r t_min t_max
+--          Just (Hit ht _ _ _ _)  -> case hit htbl r t_min ht of
+--            Nothing -> mh
+--            h1      -> h1)
+--     Nothing
+--     htbls
 
 hitSphere :: XYZ -> Double -> Ray -> Double
 hitSphere center radius ray@(Ray or dr _) =
@@ -472,11 +603,11 @@ rayColor r depth = rayColorHelp r depth (Attenuation $ Vec3 (1.0, 1.0, 1.0))
   where
     rayColorHelp :: Ray -> Int -> Attenuation -> RayTracingM s Vec3
     rayColorHelp r depth (Attenuation att_acc) = do
-      worldRef <- getWorldRef
+      worldRef <- getSceneRef
       htbls <- lift $ readSTRef worldRef
       if depth <= 0
         then return (Vec3 (0.0, 0.0, 0.0))
-        else case hitList htbls r 0.001 infinity of
+        else case hit htbls r 0.001 infinity of
                Just h -> do
                  mscatter <- scatter (hit_material h) r h
                  case mscatter of
@@ -527,7 +658,7 @@ someFunc = do
   let pp = pixelPositions imageWidth imageHeight
   --gen <- newPureMT
   let gen = pureMT 1024 -- Fix a seed for comparable performance tests
-  let (world, g1) = makeWorld gen
+  let (world, g1) = makeScene 0.0 1.0 gen
   gs <- replicateM (nThreads - 1) newPureMT
   let gens = g1 : gs
   let vals =
@@ -541,7 +672,7 @@ someFunc = do
   hPutStr stderr "\nDone.\n"
 
 parallelRenderRow ::
-     [(Int, Int)] -> World -> [PureMT] -> ST s [Vec3]
+     [(Int, Int)] -> Scene -> [PureMT] -> ST s [Vec3]
 parallelRenderRow rowps world gs =
   let sampleGroups =
         parMap rpar
@@ -556,17 +687,18 @@ parallelRenderRow rowps world gs =
         sampleGroups
 
 -- |Generate the image from the cover of the book with lots of spheres
-makeWorld :: PureMT -> (World, PureMT)
-makeWorld gen =
+makeScene :: Time -> Time -> PureMT -> (Scene, PureMT)
+makeScene t0 t1 gen =
   runST $ do
     gRef <- newSTRef gen
-    worldRef <- newSTRef []
-    world <- runReaderT makeWorldM (worldRef, gRef)
+    -- dummy world to satisfy RandomState:
+    worldRef <- newSTRef (Aabb (Vec3 (0, 0, 0)) (Vec3 (0, 0, 0)))
+    world <- runReaderT makeSceneM (worldRef, gRef)
     g1 <- readSTRef gRef
     return (world, g1)
   where
-    makeWorldM :: RandomState s World
-    makeWorldM = do
+    makeSceneM :: RandomState s Scene
+    makeSceneM = do
       let ns = [(x, y) | x <- [-11 .. 10], y <- [-11 .. 10]]
       let ground =
             Sphere
@@ -586,8 +718,9 @@ makeWorld gen =
               1.0
               (Metal (Attenuation $ Vec3 (0.7, 0.6, 0.5)) (Fuzz 0.0))
       nps <- catMaybes <$> mapM makeRandomSphereM ns
-      return $ ground : s1 : s2 : s3 : nps
-    makeRandomSphereM :: (Int, Int) -> RandomState s (Maybe Shape)
+      bvh <- makeBVH 0.0 1.0 $ ground :<| s1 :<| s2 :<| s3 :<| S.fromList nps
+      return bvh
+    makeRandomSphereM :: (Int, Int) -> RandomState s (Maybe Hittable)
     makeRandomSphereM (a, b) = do
       mat <- randomDoubleM
       px <- randomDoubleM
