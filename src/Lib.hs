@@ -171,6 +171,8 @@ data Hit = Hit
   , hit_p         :: XYZ
   , hit_normal    :: XYZ -- vector normal to the surface of the object
                          -- at the point of the hit
+  , hit_u         :: Double
+  , hit_v         :: Double
   , hit_frontFace :: Bool -- did the ray hit the outer face of the
                           -- object?
   , hit_material  :: Material
@@ -182,12 +184,14 @@ emptyHit =
     0
     (Vec3 (-1.0, -1.0, -1.0))
     (Vec3 (0.0, 0.0, 0.0))
+    0.0
+    0.0
     False
     (Dielectric (RefractiveIdx 0.0))
 
 data Material
-  = Lambertian Attenuation
-  | Metal Attenuation Fuzz
+  = Lambertian Texture
+  | Metal Texture Fuzz
   | Dielectric RefractiveIdx
   deriving Show
 
@@ -199,6 +203,19 @@ newtype Fuzz = Fuzz Double
 
 newtype RefractiveIdx = RefractiveIdx Double
   deriving Show
+
+data Texture
+  = ConstantColor { const_color :: Vec3 }
+  | CheckerTexture { checkerTextureOdd  :: Texture
+                   , checkerTextureEven :: Texture }
+  deriving (Show)
+
+textureValue :: Texture -> Double -> Double -> Vec3 -> Vec3
+textureValue (ConstantColor color) _ _ _ = color
+textureValue (CheckerTexture oddTex evenTex) u v p =
+  if sin (10 * vecX p) * sin (10 * vecY p) * sin (10 * vecZ p) < 0
+  then textureValue oddTex u v p
+  else textureValue evenTex u v p
 
 data Hittable
   = Sphere { sphere_center   :: Vec3
@@ -240,20 +257,20 @@ sphMaterial :: Hittable -> Material
 sphMaterial (Sphere _ _ m)             = m
 sphMaterial (MovingSphere _ _ _ _ _ m) = m
 
-scatter :: Material -> Ray -> Hit -> RandomState s (Maybe (Ray, Attenuation))
-scatter (Lambertian att) rin (Hit _ hp hn _ _) = do
+scatter :: Material -> Ray -> Hit -> RandomState s (Maybe (Ray, Vec3))
+scatter (Lambertian tex) rin (Hit _ hp hn hu hv _ _) = do
   rUnit <- randomUnitVectorM
   let scatterDirection = hn `vecAdd` rUnit
   let scattered = Ray hp scatterDirection (ray_time rin)
-  return $ Just (scattered, att)
-scatter (Metal att (Fuzz fuzz)) rin (Hit _ hp hn _ _) = do
+  return $ Just (scattered, textureValue tex hu hv hp)
+scatter (Metal tex (Fuzz fuzz)) rin (Hit _ hp hn hu hv _ _) = do
   rUnit <- randomUnitVectorM
   let reflected = reflect (makeUnitVector (ray_direction rin)) hn
   let scattered = Ray hp (reflected `vecAdd` scale fuzz rUnit) (ray_time rin)
   return $ if dot (ray_direction scattered) hn > 0.0
-           then Just (scattered, att)
+           then Just (scattered, textureValue tex hu hv hp)
            else Nothing
-scatter (Dielectric (RefractiveIdx ref_idx)) rin (Hit _ hp hn hff _) = do
+scatter (Dielectric (RefractiveIdx ref_idx)) rin (Hit _ hp hn hu hv hff _) = do
   let attenuation = Vec3 (1.0, 1.0, 1.0)
   let etaiOverEtat =
         if hff
@@ -266,10 +283,9 @@ scatter (Dielectric (RefractiveIdx ref_idx)) rin (Hit _ hp hn hff _) = do
   return $
     if (etaiOverEtat * sinTheta > 1.0) || rd < schlick cosTheta etaiOverEtat
       then let reflected = reflect unitDirection hn
-            in Just (Ray hp reflected (ray_time rin), Attenuation attenuation)
-      else let refracted =
-                 refract unitDirection hn etaiOverEtat
-            in Just (Ray hp refracted (ray_time rin), Attenuation attenuation)
+            in Just (Ray hp reflected (ray_time rin), attenuation)
+      else let refracted = refract unitDirection hn etaiOverEtat
+            in Just (Ray hp refracted (ray_time rin), attenuation)
 
 reflect :: XYZ -> XYZ -> XYZ
 reflect v n = v `vecSub` scale (2.0 * dot v n) n
@@ -348,7 +364,7 @@ hit (BVHNode bvh_l bvh_r box) r@(Ray or dr tm) t_min t_max =
     Just _ ->
       case hit bvh_l r t_min t_max of -- try to hit left branch
         Nothing -> hit bvh_r r t_min t_max -- no hits, try right branch
-        Just hitLeft@(Hit t _ _ _ _) -> -- left branch hit
+        Just hitLeft@(Hit t _ _ _ _ _ _) -> -- left branch hit
           case hit bvh_r r t_min t of -- is there a closer right branch hit?
             Nothing       -> Just hitLeft -- no, take hit from left branch
             Just hitRight -> Just hitRight -- yes, take hit from right branch
@@ -402,7 +418,10 @@ recHit temp r@(Ray or dr tm) sphere =
         if frontFace
           then outwardNormal
           else vecNegate outwardNormal
-   in Hit temp p n frontFace sm
+      (u, v) = let phi = atan2 (vecZ p) (vecX p)
+                   theta = asin (vecY p)
+        in (1.0 - (phi + pi) / (2 * pi), (theta + pi / 2) / pi)
+   in Hit temp p n u v frontFace sm
 
 -- hitList :: Scene -> Ray -> Double -> Double -> Maybe Hit
 -- hitList htbls r t_min t_max =
@@ -570,10 +589,10 @@ newCamera lookfrom lookat vup vfov aspect aperture focusDist t0 t1 =
    in Camera origin lowerLeftCorner horizontal vertical u v w lensRadius t0 t1
 
 rayColor :: Ray -> Int -> RayTracingM s Vec3
-rayColor r depth = rayColorHelp r depth (Attenuation $ Vec3 (1.0, 1.0, 1.0))
+rayColor r depth = rayColorHelp r depth (Vec3 (1.0, 1.0, 1.0))
   where
-    rayColorHelp :: Ray -> Int -> Attenuation -> RayTracingM s Vec3
-    rayColorHelp r depth (Attenuation att_acc) = do
+    rayColorHelp :: Ray -> Int -> Vec3 -> RayTracingM s Vec3
+    rayColorHelp r depth att_acc = do
       worldRef <- getSceneRef
       htbls <- lift $ readSTRef worldRef
       if depth <= 0
@@ -582,11 +601,11 @@ rayColor r depth = rayColorHelp r depth (Attenuation $ Vec3 (1.0, 1.0, 1.0))
                Just h -> do
                  mscatter <- scatter (hit_material h) r h
                  case mscatter of
-                   Just (sray, Attenuation att) ->
+                   Just (sray, att) ->
                      rayColorHelp
                        sray
                        (depth - 1)
-                       (Attenuation (att_acc `vecMul` att))
+                       (att_acc `vecMul` att)
                    Nothing -> return $ Vec3 (0.0, 0.0, 0.0)
                Nothing ->
                  let unitDirection = makeUnitVector (ray_direction r)
@@ -690,22 +709,25 @@ makeRandomScene t0 t1 gen =
             Sphere
               (Vec3 (0.0, -1000.0, 0.0))
               1000
-              (Lambertian (Attenuation $ Vec3 (0.5, 0.5, 0.5)))
+              -- (Lambertian (ConstantColor $ Vec3 (0.5, 0.5, 0.5))) --gray
+              (Lambertian
+                 (CheckerTexture
+                    (ConstantColor $ Vec3 (0.2, 0.3, 0.1))
+                    (ConstantColor $ Vec3 (0.9, 0.9, 0.9))))
       let s1 =
             Sphere (Vec3 (0.0, 1.0, 0.0)) 1.0 (Dielectric (RefractiveIdx 1.5))
       let s2 =
             Sphere
               (Vec3 (-4.0, 1.0, 0.0))
               1.0
-              (Lambertian (Attenuation $ Vec3 (0.4, 0.2, 0.1)))
+              (Lambertian (ConstantColor $ Vec3 (0.4, 0.2, 0.1)))
       let s3 =
             Sphere
               (Vec3 (4.0, 1.0, 0.0))
               1.0
-              (Metal (Attenuation $ Vec3 (0.7, 0.6, 0.5)) (Fuzz 0.0))
+              (Metal (ConstantColor $ Vec3 (0.7, 0.6, 0.5)) (Fuzz 0.0))
       nps <- catMaybes <$> mapM makeRandomSphereM ns
-      bvh <- makeBVH 0.0 1.0 $ ground :<| s1 :<| s2 :<| s3 :<| S.fromList nps
-      return bvh
+      makeBVH 0.0 1.0 $ ground :<| s1 :<| s2 :<| s3 :<| S.fromList nps
     makeRandomSphereM :: (Int, Int) -> RandomState s (Maybe Hittable)
     makeRandomSphereM (a, b) = do
       mat <- randomDoubleM
@@ -730,7 +752,7 @@ makeRandomScene t0 t1 gen =
                          0.0
                          1.0
                          0.2
-                         (Lambertian (Attenuation albedo))
+                         (Lambertian (ConstantColor albedo))
                 | mat < 0.95 -- Metal
                  ->
                   do albedo <- randomVec3DoubleRM 0.5 1.0
@@ -740,7 +762,7 @@ makeRandomScene t0 t1 gen =
                        Sphere
                          center
                          0.2
-                         (Metal (Attenuation albedo) (Fuzz fuzz))
+                         (Metal (ConstantColor albedo) (Fuzz fuzz))
                 | otherwise --Glass
                  ->
                   return $
