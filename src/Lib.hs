@@ -51,14 +51,18 @@ infinity = read "Infinity" :: Double
 type Scene = Hittable
 
 -- Use the ST monad to thread the random number generator
-type RandomState s = ReaderT (STRef s Scene, STRef s PureMT) (ST s)
+type RandomState s = ReaderT (STRef s Scene, Camera, STRef s PureMT) (ST s)
 
 getGenRef :: RandomState s (STRef s PureMT)
-getGenRef = do (_, genRef) <- ask
+getGenRef = do (_, _, genRef) <- ask
                return genRef
 
+getCamera :: RandomState s Camera
+getCamera = do (_, cam, _) <- ask
+               return cam
+
 getSceneRef :: RandomState s (STRef s Scene)
-getSceneRef = do (worldRef, _) <- ask
+getSceneRef = do (worldRef, _, _) <- ask
                  return worldRef
 
 type RayTracingM s = RandomState s
@@ -537,19 +541,6 @@ getRay c s t = do
        offset)
       tm
 
-defaultCamera :: Camera
-defaultCamera =
-  newCamera
-    (Vec3 (13.0, 2.0, 3.0))
-    (Vec3 (0.0, 0.0, 0.0))
-    (Vec3 (0.0, 1.0, 0.0))
-    20.0
-    (fromIntegral imageWidth / fromIntegral imageHeight)
-    0.1
-    10.0
-    0.0
-    1.0
-
 newCamera ::
      XYZ
   -> XYZ
@@ -613,7 +604,8 @@ sampleColor (x, y) accCol _ = do
   let (rv, g2) = randomDouble g1
   let u = (fromIntegral x + ru) / fromIntegral imageWidth
   let v = (fromIntegral y + rv) / fromIntegral imageHeight
-  r <- getRay defaultCamera u v
+  camera <- getCamera
+  r <- getRay camera u v
   lift $ writeSTRef gRef g2
   c1 <- rayColor r maxDepth
   return $ accCol `vecAdd` c1
@@ -638,7 +630,8 @@ someFunc = do
   let pp = pixelPositions imageWidth imageHeight
   --gen <- newPureMT
   let gen = pureMT 1024 -- Fix a seed for comparable performance tests
-  let (world, g1) = makeScene 0.0 1.0 gen
+  let (world, g1) = makeTwoSpheresScene 0.0 1.0 gen
+  let camera = twoSpheresSceneCamera
   gs <- replicateM (nThreads - 1) newPureMT
   let gens = g1 : gs
   let vals =
@@ -646,34 +639,47 @@ someFunc = do
         mapM
           (\rowPs ->
              map scaleColors <$>
-             parallelRenderRow rowPs world gens)
+             parallelRenderRow rowPs world camera gens)
           pp
   mapM_ printRow (zip [1 .. imageHeight] vals)
   hPutStr stderr "\nDone.\n"
 
 parallelRenderRow ::
-     [(Int, Int)] -> Scene -> [PureMT] -> ST s [Vec3]
-parallelRenderRow rowps world gs =
+     [(Int, Int)] -> Scene -> Camera -> [PureMT] -> ST s [Vec3]
+parallelRenderRow rowps world camera gs =
   let sampleGroups =
         parMap rpar
           (\gen -> force $ runST $ do
               worldRef <- newSTRef world
               genRef <- newSTRef gen
-              runReaderT (renderRow rowps) (worldRef, genRef))
+              runReaderT (renderRow rowps) (worldRef, camera, genRef))
           gs
    in return $ foldr
         (zipWith vecAdd)
         (replicate imageWidth (Vec3 (0.0, 0.0, 0.0)))
         sampleGroups
 
+randomSceneCamera :: Camera
+randomSceneCamera =
+  newCamera
+    (Vec3 (13.0, 2.0, 3.0))
+    (Vec3 (0.0, 0.0, 0.0))
+    (Vec3 (0.0, 1.0, 0.0))
+    20.0
+    (fromIntegral imageWidth / fromIntegral imageHeight)
+    0.1
+    10.0
+    0.0
+    1.0
+
 -- |Generate the image from the cover of the book with lots of spheres
-makeScene :: Time -> Time -> PureMT -> (Scene, PureMT)
-makeScene t0 t1 gen =
+makeRandomScene :: Time -> Time -> PureMT -> (Scene, PureMT)
+makeRandomScene t0 t1 gen =
   runST $ do
     gRef <- newSTRef gen
     -- dummy world to satisfy RandomState:
     worldRef <- newSTRef (Aabb (Vec3 (0, 0, 0)) (Vec3 (0, 0, 0)))
-    world <- runReaderT makeSceneM (worldRef, gRef)
+    world <- runReaderT makeSceneM (worldRef, randomSceneCamera, gRef)
     g1 <- readSTRef gRef
     return (world, g1)
   where
