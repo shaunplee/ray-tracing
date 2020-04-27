@@ -678,6 +678,42 @@ parallelRenderRow rowps world camera gs =
         (replicate imageWidth (Vec3 (0.0, 0.0, 0.0)))
         sampleGroups
 
+twoSpheresSceneCamera :: Camera
+twoSpheresSceneCamera =
+  newCamera
+    (Vec3 (13.0, 2.0, 3.0))
+    (Vec3 (0.0, 0.0, 0.0))
+    (Vec3 (0.0, 1.0, 0.0))
+    20.0
+    (fromIntegral imageWidth / fromIntegral imageHeight)
+    0.1
+    10.0
+    0.0
+    1.0
+
+makeTwoSpheresScene :: Time -> Time -> PureMT -> (Scene, PureMT)
+makeTwoSpheresScene t0 t1 gen =
+  runST $ do
+    let checkerMaterial =
+          Metal
+            (CheckerTexture
+               (ConstantColor $ Vec3 (0.2, 0.3, 0.1))
+               (ConstantColor $ Vec3 (0.9, 0.9, 0.9)))
+            (Fuzz 0.0)
+    let flatMaterial = Lambertian (ConstantColor $ Vec3 (0.6, 0.2, 0.1))
+    gRef <- newSTRef gen
+    worldRef <- newSTRef (Aabb (Vec3 (0, 0, 0)) (Vec3 (0, 0, 0)))
+    world <-
+      runReaderT
+        (makeBVH
+           t0
+           t1
+           (Sphere (Vec3 (0, -10, 0)) 10 checkerMaterial :<|
+            Sphere (Vec3 (0, 10, 0)) 10 flatMaterial :<|
+            Empty))
+        (worldRef, twoSpheresSceneCamera, gRef)
+    return (world, gen)
+
 randomSceneCamera :: Camera
 randomSceneCamera =
   newCamera
