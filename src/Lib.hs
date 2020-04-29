@@ -422,8 +422,9 @@ recHit temp r@(Ray or dr tm) sphere =
         if frontFace
           then outwardNormal
           else vecNegate outwardNormal
-      (u, v) = let phi = atan2 (vecZ p) (vecX p)
-                   theta = asin (vecY p)
+      pShift = p `vecSub` sc
+      (u, v) = let phi = atan2 (vecZ p) (vecX pShift)
+                   theta = asin (vecY pShift)
         in (1.0 - (phi + pi) / (2 * pi), (theta + pi / 2) / pi)
    in Hit temp p n u v frontFace sm
 
