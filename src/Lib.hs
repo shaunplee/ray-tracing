@@ -657,8 +657,8 @@ someFunc = do
   let pp = pixelPositions imageWidth imageHeight
   --gen <- newPureMT
   let gen = pureMT 1024 -- Fix a seed for comparable performance tests
-  let (world, g1) = makeTwoSpheresScene 0.0 1.0 gen
-  let camera = twoSpheresSceneCamera
+  let (world, g1) = makeRandomScene 0.0 1.0 gen
+  let camera = randomSceneCamera
   gs <- replicateM (nThreads - 1) newPureMT
   let gens = g1 : gs
   let vals =
