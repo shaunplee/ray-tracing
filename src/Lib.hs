@@ -145,8 +145,9 @@ clamp x min max =
 scaleColor :: Double -> Word8
 scaleColor x = floor $ 256 * clamp (sqrt x) 0.0 0.999
 
-scaleColors :: Vec3 -> RGB
-scaleColors (Vec3 (x, y, z)) = RGB (scaleColor x, scaleColor y, scaleColor z)
+scaleColors :: Albedo -> RGB
+scaleColors (Albedo (Vec3 (x, y, z))) =
+  RGB (scaleColor x, scaleColor y, scaleColor z)
 
 printRow :: (Int, [RGB]) -> IO ()
 printRow (i, row) = do
@@ -195,22 +196,25 @@ data Material
   | Dielectric RefractiveIdx
   deriving Show
 
-newtype Attenuation = Attenuation Vec3
-  deriving Show
-
 newtype Fuzz = Fuzz Double
   deriving Show
 
 newtype RefractiveIdx = RefractiveIdx Double
   deriving Show
 
+newtype Albedo = Albedo Vec3
+  deriving Show
+
+instance NFData Albedo where
+  rnf (Albedo v) = rnf v `seq` ()
+
 data Texture
-  = ConstantColor { const_color :: Vec3 }
+  = ConstantColor { constColor :: Albedo }
   | CheckerTexture { checkerTextureOdd  :: Texture
                    , checkerTextureEven :: Texture }
-  deriving (Show)
+  deriving Show
 
-textureValue :: Texture -> Double -> Double -> Vec3 -> Vec3
+textureValue :: Texture -> Double -> Double -> Vec3 -> Albedo
 textureValue (ConstantColor color) _ _ _ = color
 textureValue (CheckerTexture oddTex evenTex) u v p =
   if sin (10 * vecX p) * sin (10 * vecY p) * sin (10 * vecZ p) < 0
@@ -257,7 +261,7 @@ sphMaterial :: Hittable -> Material
 sphMaterial (Sphere _ _ m)             = m
 sphMaterial (MovingSphere _ _ _ _ _ m) = m
 
-scatter :: Material -> Ray -> Hit -> RandomState s (Maybe (Ray, Vec3))
+scatter :: Material -> Ray -> Hit -> RandomState s (Maybe (Ray, Albedo))
 scatter (Lambertian tex) rin (Hit _ hp hn hu hv _ _) = do
   rUnit <- randomUnitVectorM
   let scatterDirection = hn `vecAdd` rUnit
@@ -271,7 +275,7 @@ scatter (Metal tex (Fuzz fuzz)) rin (Hit _ hp hn hu hv _ _) = do
            then Just (scattered, textureValue tex hu hv hp)
            else Nothing
 scatter (Dielectric (RefractiveIdx ref_idx)) rin (Hit _ hp hn hu hv hff _) = do
-  let attenuation = Vec3 (1.0, 1.0, 1.0)
+  let albedo = Albedo $ Vec3 (1.0, 1.0, 1.0)
   let etaiOverEtat =
         if hff
           then 1.0 / ref_idx
@@ -283,9 +287,9 @@ scatter (Dielectric (RefractiveIdx ref_idx)) rin (Hit _ hp hn hu hv hff _) = do
   return $
     if (etaiOverEtat * sinTheta > 1.0) || rd < schlick cosTheta etaiOverEtat
       then let reflected = reflect unitDirection hn
-            in Just (Ray hp reflected (ray_time rin), attenuation)
+            in Just (Ray hp reflected (ray_time rin), albedo)
       else let refracted = refract unitDirection hn etaiOverEtat
-            in Just (Ray hp refracted (ray_time rin), attenuation)
+            in Just (Ray hp refracted (ray_time rin), albedo)
 
 reflect :: XYZ -> XYZ -> XYZ
 reflect v n = v `vecSub` scale (2.0 * dot v n) n
@@ -588,35 +592,35 @@ newCamera lookfrom lookat vup vfov aspect aperture focusDist t0 t1 =
       vertical = scale (2 * halfHeight * focusDist) v
    in Camera origin lowerLeftCorner horizontal vertical u v w lensRadius t0 t1
 
-rayColor :: Ray -> Int -> RayTracingM s Vec3
-rayColor r depth = rayColorHelp r depth (Vec3 (1.0, 1.0, 1.0))
+rayColor :: Ray -> Int -> RayTracingM s Albedo
+rayColor r depth = rayColorHelp r depth (Albedo $ Vec3 (1.0, 1.0, 1.0))
   where
-    rayColorHelp :: Ray -> Int -> Vec3 -> RayTracingM s Vec3
-    rayColorHelp r depth att_acc = do
+    rayColorHelp :: Ray -> Int -> Albedo -> RayTracingM s Albedo
+    rayColorHelp r depth (Albedo alb_acc) = do
       worldRef <- getSceneRef
       htbls <- lift $ readSTRef worldRef
       if depth <= 0
-        then return (Vec3 (0.0, 0.0, 0.0))
+        then return $ Albedo $ Vec3 (0.0, 0.0, 0.0)
         else case hit htbls r 0.001 infinity of
                Just h -> do
                  mscatter <- scatter (hit_material h) r h
                  case mscatter of
-                   Just (sray, att) ->
+                   Just (sray, Albedo alb) ->
                      rayColorHelp
                        sray
                        (depth - 1)
-                       (att_acc `vecMul` att)
-                   Nothing -> return $ Vec3 (0.0, 0.0, 0.0)
+                       (Albedo $ alb_acc `vecMul` alb)
+                   Nothing -> return $ Albedo $ Vec3 (0.0, 0.0, 0.0)
                Nothing ->
                  let unitDirection = makeUnitVector (ray_direction r)
                      t = 0.5 * (vecY unitDirection + 1.0)
-                  in return $
-                     att_acc `vecMul`
+                  in return $ Albedo $
+                     alb_acc `vecMul`
                      (scale (1.0 - t) (Vec3 (1.0, 1.0, 1.0)) `vecAdd`
                       scale t (Vec3 (0.5, 0.7, 1.0)))
 
-sampleColor :: (Int, Int) -> Vec3 -> Int -> RayTracingM s Vec3
-sampleColor (x, y) accCol _ = do
+sampleColor :: (Int, Int) -> Albedo -> Int -> RayTracingM s Albedo
+sampleColor (x, y) (Albedo accCol) _ = do
   gRef <- getGenRef
   gen <- lift $ readSTRef gRef
   let (ru, g1) = randomDouble gen
@@ -626,16 +630,19 @@ sampleColor (x, y) accCol _ = do
   camera <- getCamera
   r <- getRay camera u v
   lift $ writeSTRef gRef g2
-  c1 <- rayColor r maxDepth
-  return $ accCol `vecAdd` c1
+  (Albedo c1) <- rayColor r maxDepth
+  return $ Albedo $ accCol `vecAdd` c1
 
-renderPos :: (Int, Int) -> RayTracingM s XYZ
+renderPos :: (Int, Int) -> RayTracingM s Albedo
 renderPos (x, y) = do
-  summedColor <-
-    foldM (sampleColor (x, y)) (Vec3 (0.0, 0.0, 0.0)) [0 .. nsPerThread - 1]
-  return $ divide summedColor (fromIntegral ns)
+  (Albedo summedColor) <-
+    foldM
+      (sampleColor (x, y))
+      (Albedo $ Vec3 (0.0, 0.0, 0.0))
+      [0 .. nsPerThread - 1]
+  return $ Albedo $ divide summedColor (fromIntegral ns)
 
-renderRow :: [(Int, Int)] -> RayTracingM s [Vec3]
+renderRow :: [(Int, Int)] -> RayTracingM s [Albedo]
 renderRow = mapM renderPos
 
 pixelPositions :: Int -> Int -> [[(Int, Int)]]
@@ -664,7 +671,7 @@ someFunc = do
   hPutStr stderr "\nDone.\n"
 
 parallelRenderRow ::
-     [(Int, Int)] -> Scene -> Camera -> [PureMT] -> ST s [Vec3]
+     [(Int, Int)] -> Scene -> Camera -> [PureMT] -> ST s [Albedo]
 parallelRenderRow rowps world camera gs =
   let sampleGroups =
         parMap rpar
@@ -673,9 +680,9 @@ parallelRenderRow rowps world camera gs =
               genRef <- newSTRef gen
               runReaderT (renderRow rowps) (worldRef, camera, genRef))
           gs
-   in return $ foldr
-        (zipWith vecAdd)
-        (replicate imageWidth (Vec3 (0.0, 0.0, 0.0)))
+   in return $ foldl'
+        (zipWith (\(Albedo a1) (Albedo a2) -> Albedo $ vecAdd a1 a2))
+        (replicate imageWidth (Albedo $ Vec3 (0.0, 0.0, 0.0)))
         sampleGroups
 
 twoSpheresSceneCamera :: Camera
@@ -697,10 +704,11 @@ makeTwoSpheresScene t0 t1 gen =
     let checkerMaterial =
           Metal
             (CheckerTexture
-               (ConstantColor $ Vec3 (0.2, 0.3, 0.1))
-               (ConstantColor $ Vec3 (0.9, 0.9, 0.9)))
+               (ConstantColor $ Albedo $ Vec3 (0.2, 0.3, 0.1))
+               (ConstantColor $ Albedo $ Vec3 (0.9, 0.9, 0.9)))
             (Fuzz 0.0)
-    let flatMaterial = Lambertian (ConstantColor $ Vec3 (0.6, 0.2, 0.1))
+    let flatMaterial =
+          Lambertian (ConstantColor $ Albedo $ Vec3 (0.6, 0.2, 0.1))
     gRef <- newSTRef gen
     worldRef <- newSTRef (Aabb (Vec3 (0, 0, 0)) (Vec3 (0, 0, 0)))
     world <-
@@ -745,23 +753,23 @@ makeRandomScene t0 t1 gen =
             Sphere
               (Vec3 (0.0, -1000.0, 0.0))
               1000
-              -- (Lambertian (ConstantColor $ Vec3 (0.5, 0.5, 0.5))) --gray
+              -- (Lambertian (ConstantColor $ Albedo $ Vec3 (0.5, 0.5, 0.5))) --gray
               (Lambertian
                  (CheckerTexture
-                    (ConstantColor $ Vec3 (0.2, 0.3, 0.1))
-                    (ConstantColor $ Vec3 (0.9, 0.9, 0.9))))
+                    (ConstantColor $ Albedo $ Vec3 (0.2, 0.3, 0.1))
+                    (ConstantColor $ Albedo $ Vec3 (0.9, 0.9, 0.9))))
       let s1 =
             Sphere (Vec3 (0.0, 1.0, 0.0)) 1.0 (Dielectric (RefractiveIdx 1.5))
       let s2 =
             Sphere
               (Vec3 (-4.0, 1.0, 0.0))
               1.0
-              (Lambertian (ConstantColor $ Vec3 (0.4, 0.2, 0.1)))
+              (Lambertian (ConstantColor $ Albedo $ Vec3 (0.4, 0.2, 0.1)))
       let s3 =
             Sphere
               (Vec3 (4.0, 1.0, 0.0))
               1.0
-              (Metal (ConstantColor $ Vec3 (0.7, 0.6, 0.5)) (Fuzz 0.0))
+              (Metal (ConstantColor $ Albedo $ Vec3 (0.7, 0.6, 0.5)) (Fuzz 0.0))
       nps <- catMaybes <$> mapM makeRandomSphereM ns
       makeBVH 0.0 1.0 $ ground :<| s1 :<| s2 :<| s3 :<| S.fromList nps
     makeRandomSphereM :: (Int, Int) -> RandomState s (Maybe Hittable)
@@ -779,7 +787,7 @@ makeRandomScene t0 t1 gen =
                      a2 <- randomVec3DoubleM
                      sph_move_x <- randomDoubleRM (-0.25) 0.25
                      sph_move_z <- randomDoubleRM (-0.25) 0.25
-                     let albedo = a1 `vecMul` a2
+                     let albedo = Albedo $ a1 `vecMul` a2
                      return $
                        Just $
                        MovingSphere
@@ -791,7 +799,7 @@ makeRandomScene t0 t1 gen =
                          (Lambertian (ConstantColor albedo))
                 | mat < 0.95 -- Metal
                  ->
-                  do albedo <- randomVec3DoubleRM 0.5 1.0
+                  do albedo <- Albedo <$> randomVec3DoubleRM 0.5 1.0
                      fuzz <- randomDoubleRM 0.0 0.5
                      return $
                        Just $
