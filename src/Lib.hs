@@ -428,18 +428,6 @@ recHit temp r@(Ray or dr tm) sphere =
         in (1.0 - (phi + pi) / (2 * pi), (theta + pi / 2) / pi)
    in Hit temp p n u v frontFace sm
 
--- hitList :: Scene -> Ray -> Double -> Double -> Maybe Hit
--- hitList htbls r t_min t_max =
---   foldl'
---     (\mh htbl ->
---        case mh of
---          Nothing -> hit htbl r t_min t_max
---          Just (Hit ht _ _ _ _)  -> case hit htbl r t_min ht of
---            Nothing -> mh
---            h1      -> h1)
---     Nothing
---     htbls
-
 hitSphere :: XYZ -> Double -> Ray -> Double
 hitSphere center radius ray@(Ray or dr _) =
   let oc = or `vecSub` center
