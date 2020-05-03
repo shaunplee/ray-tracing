@@ -479,15 +479,15 @@ recHit temp r@(Ray or dr tm) sphere =
       sr = sphRadius sphere
       sm = sphMaterial sphere
       p = r `at` temp
-      outwardNormal = divide (p `vecSub` sc) sr
+      pShift = p `vecSub` sc
+      outwardNormal = divide pShift sr
       frontFace = dot dr outwardNormal < 0.0
       n =
         if frontFace
           then outwardNormal
           else vecNegate outwardNormal
-      pShift = p `vecSub` sc
-      (u, v) = let phi = atan2 (vecZ pShift) (vecX pShift)
-                   theta = asin (vecY pShift)
+      (u, v) = let phi = atan2 (vecZ outwardNormal) (vecX outwardNormal)
+                   theta = asin (vecY outwardNormal)
         in (1.0 - ((phi + pi) / (2 * pi)), (theta + (pi / 2)) / pi)
    in Hit temp p n u v frontFace sm
 
