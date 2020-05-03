@@ -71,6 +71,9 @@ getSceneRef :: RandomState s (STRef s Scene)
 getSceneRef = do (worldRef, _, _) <- ask
                  return worldRef
 
+instance NFData PureMT where
+  rnf x = seq x ()
+
 type RayTracingM s = RandomState s
 
 -- Final representation of a color of a pixel before output
@@ -704,29 +707,41 @@ someFunc = do
   gs <- replicateM (nThreads - 1) newPureMT
   let gens = g1 : gs
   let vals =
-        runST $
+        runST $ do
+        gensRef <- newSTRef gens
         mapM
           (\rowPs ->
              map scaleColors <$>
-             parallelRenderRow rowPs world camera gens)
+             parallelRenderRow rowPs world camera gensRef)
           pp
   mapM_ printRow (zip [1 .. imageHeight] vals)
   hPutStr stderr "\nDone.\n"
 
 parallelRenderRow ::
-     [(Int, Int)] -> Scene -> Camera -> [PureMT] -> ST s [Albedo]
-parallelRenderRow rowps world camera gs =
-  let sampleGroups =
-        parMap rpar
-          (\gen -> force $ runST $ do
-              worldRef <- newSTRef world
-              genRef <- newSTRef gen
-              runReaderT (renderRow rowps) (worldRef, camera, genRef))
+     [(Int, Int)] -> Scene -> Camera -> STRef s [PureMT] -> ST s [Albedo]
+parallelRenderRow rowps world camera gsRef = do
+  gs <- readSTRef gsRef
+  let (sampleGroups, newGs) =
+        unzip $
+        parMap
+          rpar
+          (\gen ->
+             force $
+             runST $ do
+               worldRef <- newSTRef world
+               genRef <- newSTRef gen
+               runReaderT
+                 (do row <- renderRow rowps
+                     g <- lift $ readSTRef genRef
+                     return (row, g))
+                 (worldRef, camera, genRef))
           gs
-   in return $ foldl'
-        (zipWith (\(Albedo a1) (Albedo a2) -> Albedo $ vecAdd a1 a2))
-        (replicate imageWidth (Albedo $ Vec3 (0.0, 0.0, 0.0)))
-        sampleGroups
+  writeSTRef gsRef newGs
+  return $
+    foldl'
+      (zipWith (\(Albedo a1) (Albedo a2) -> Albedo $ vecAdd a1 a2))
+      (replicate imageWidth (Albedo $ Vec3 (0.0, 0.0, 0.0)))
+      sampleGroups
 
 twoSpheresSceneCamera :: Camera
 twoSpheresSceneCamera =
