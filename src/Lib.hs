@@ -9,16 +9,22 @@ import           Control.Applicative           ((<$>))
 import           Control.DeepSeq               (NFData, force, rnf)
 import           Control.Monad                 (foldM)
 import           Control.Monad.Reader
-import           Control.Monad.ST.Lazy         (ST (..), runST)
+import           Control.Monad.ST.Lazy         (ST (..), runST, strictToLazyST)
 import           Control.Monad.Trans           (lift)
 import           Control.Parallel
 import           Control.Parallel.Strategies   (Eval, parMap, rpar)
+import           Data.Bits                     (xor, (.&.))
 import           Data.Foldable                 (foldl')
 import           Data.List                     (intercalate)
 import           Data.Maybe                    (catMaybes)
 import           Data.Sequence                 (Seq (..))
 import qualified Data.Sequence                 as S
 import           Data.STRef.Lazy
+import           Data.Vector.Unboxed           (Vector (..), enumFromN, freeze,
+                                                thaw)
+import qualified Data.Vector.Unboxed           as V (fromList, (!))
+import           Data.Vector.Unboxed.Mutable   (MVector (..))
+import qualified Data.Vector.Unboxed.Mutable   as MV (new, swap, write)
 import           Data.Word                     (Word8)
 import           System.IO                     (hPutStr, stderr)
 import           System.Random.Mersenne.Pure64
@@ -212,7 +218,39 @@ data Texture
   = ConstantColor { constColor :: Albedo }
   | CheckerTexture { checkerTextureOdd  :: Texture
                    , checkerTextureEven :: Texture }
+  | Perlin { perlinRanFloat :: Vector Double
+           , perlinPermX    :: Vector Int
+           , perlinPermY    :: Vector Int
+           , perlinPermZ    :: Vector Int
+           }
   deriving Show
+
+pointCount :: Int
+pointCount = 256
+
+makePerlin :: RandomState s Texture
+makePerlin = do
+  rds <- replicateM pointCount randomDoubleM
+  Perlin (V.fromList rds) <$> perlinGeneratePerm <*> perlinGeneratePerm <*>
+    perlinGeneratePerm
+
+perlinGeneratePerm :: RandomState s (Vector Int)
+perlinGeneratePerm = do
+  p <- lift $ strictToLazyST $ thaw $ enumFromN 0 pointCount
+  foldM_
+    (\mv i -> do
+       j <- randomIntRM 0 i
+       lift $ strictToLazyST $ MV.swap p i j)
+    ()
+    [pointCount - 1,pointCount - 2 .. 0]
+  lift $ strictToLazyST $ freeze p
+
+noise :: Texture -> Vec3 -> Double
+noise (Perlin ranfloat permX permY permZ) p =
+  let i = floor (4 * vecX p) .&. 255
+      j = floor (4 * vecY p) .&. 255
+      k = floor (4 * vecZ p) .&. 255
+   in ranfloat V.! (permX V.! i `xor` permY V.! j `xor` permZ V.! k)
 
 textureValue :: Texture -> Double -> Double -> Vec3 -> Albedo
 textureValue (ConstantColor color) _ _ _ = color
@@ -220,6 +258,7 @@ textureValue (CheckerTexture oddTex evenTex) u v p =
   if sin (10 * vecX p) * sin (10 * vecY p) * sin (10 * vecZ p) < 0
   then textureValue oddTex u v p
   else textureValue evenTex u v p
+textureValue ptex u v p = Albedo $ scale (noise ptex p) $ Vec3 (1.0, 1.0, 1.0)
 
 data Hittable
   = Sphere { sphere_center   :: Vec3
@@ -454,6 +493,9 @@ randomDoubleRM min max = do
   rd <- randomDoubleM
   return $ min + (max - min) * rd
 
+randomIntRM :: Int -> Int -> RandomState s Int
+randomIntRM lo hi = floor <$> randomDoubleRM (fromIntegral lo) (fromIntegral hi)
+
 randomVec3DoubleM :: RandomState s Vec3
 randomVec3DoubleM = do
   gRef <- getGenRef
@@ -645,7 +687,8 @@ someFunc = do
   let pp = pixelPositions imageWidth imageHeight
   --gen <- newPureMT
   let gen = pureMT 1024 -- Fix a seed for comparable performance tests
-  let (world, g1) = makeRandomScene 0.0 1.0 gen
+  --let (world, g1) = makeRandomScene 0.0 1.0 gen
+  let (world, g1) = makeTwoPerlinSpheresScene 0.0 1.0 gen
   let camera = randomSceneCamera
   gs <- replicateM (nThreads - 1) newPureMT
   let gens = g1 : gs
@@ -687,6 +730,24 @@ twoSpheresSceneCamera =
     0.0
     1.0
 
+makeTwoPerlinSpheresScene :: Time -> Time -> PureMT -> (Scene, PureMT)
+makeTwoPerlinSpheresScene t0 t1 gen =
+  runST $ do
+    gRef <- newSTRef gen
+    worldRef <- newSTRef (Aabb (Vec3 (0, 0, 0)) (Vec3 (0, 0, 0)))
+    world <-
+      runReaderT
+        (do perText <- makePerlin
+            makeBVH
+              t0
+              t1
+              (Sphere (Vec3 (0, -1000, 0)) 1000 (Lambertian perText) :<|
+               Sphere (Vec3 (0, 2, 0)) 2 (Lambertian perText) :<|
+               Empty))
+        (worldRef, twoSpheresSceneCamera, gRef)
+    g1 <- readSTRef gRef
+    return (world, g1)
+
 makeTwoSpheresScene :: Time -> Time -> PureMT -> (Scene, PureMT)
 makeTwoSpheresScene t0 t1 gen =
   runST $ do
@@ -709,7 +770,8 @@ makeTwoSpheresScene t0 t1 gen =
             Sphere (Vec3 (0, 10, 0)) 10 flatMaterial :<|
             Empty))
         (worldRef, twoSpheresSceneCamera, gRef)
-    return (world, gen)
+    g1 <- readSTRef gRef
+    return (world, g1)
 
 randomSceneCamera :: Camera
 randomSceneCamera =

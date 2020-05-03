@@ -31,6 +31,7 @@ library:
     - mersenne-random-pure64
     - parallel
     - transformers
+    - vector
 
 executables:
   ray-tracing-exe:
