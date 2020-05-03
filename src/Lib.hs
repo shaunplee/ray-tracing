@@ -173,28 +173,17 @@ data Ray = Ray
 at :: Ray -> Double -> XYZ
 at (Ray or dr _) t = or `vecAdd` scale t dr
 
-data Hit = Hit
-  { hit_t         :: Double
-  , hit_p         :: XYZ
-  , hit_normal    :: XYZ -- vector normal to the surface of the object
+data Hit
+  = Hit { hit_t         :: Double
+        , hit_p         :: XYZ
+        , hit_normal    :: XYZ -- vector normal to the surface of the object
                          -- at the point of the hit
-  , hit_u         :: Double
-  , hit_v         :: Double
-  , hit_frontFace :: Bool -- did the ray hit the outer face of the
+        , hit_u         :: Double
+        , hit_v         :: Double
+        , hit_frontFace :: Bool -- did the ray hit the outer face of the
                           -- object?
-  , hit_material  :: Material
-  }
-
-emptyHit :: Hit
-emptyHit =
-  Hit
-    0
-    (Vec3 (-1.0, -1.0, -1.0))
-    (Vec3 (0.0, 0.0, 0.0))
-    0.0
-    0.0
-    False
-    (Dielectric (RefractiveIdx 0.0))
+        , hit_material  :: Material }
+  | EmptyHit
 
 data Material
   = Lambertian Texture
@@ -222,35 +211,69 @@ data Texture
            , perlinPermX    :: Vector Int
            , perlinPermY    :: Vector Int
            , perlinPermZ    :: Vector Int
+           , perlinScale    :: Double
            }
   deriving Show
 
 pointCount :: Int
 pointCount = 256
 
-makePerlin :: RandomState s Texture
-makePerlin = do
+makePerlin :: Double -> RandomState s Texture
+makePerlin sc = do
   rds <- replicateM pointCount randomDoubleM
   Perlin (V.fromList rds) <$> perlinGeneratePerm <*> perlinGeneratePerm <*>
-    perlinGeneratePerm
+    perlinGeneratePerm <*> return sc
 
 perlinGeneratePerm :: RandomState s (Vector Int)
 perlinGeneratePerm = do
   p <- lift $ strictToLazyST $ thaw $ enumFromN 0 pointCount
   foldM_
     (\mv i -> do
-       j <- randomIntRM 0 i
-       lift $ strictToLazyST $ MV.swap p i j)
+       target <- randomIntRM 0 i
+       lift $ strictToLazyST $ MV.swap p i target)
     ()
-    [pointCount - 1,pointCount - 2 .. 0]
+    [pointCount - 1,pointCount - 2 .. 1]
   lift $ strictToLazyST $ freeze p
 
 noise :: Texture -> Vec3 -> Double
-noise (Perlin ranfloat permX permY permZ) p =
-  let i = floor (4 * vecX p) .&. 255
-      j = floor (4 * vecY p) .&. 255
-      k = floor (4 * vecZ p) .&. 255
-   in ranfloat V.! (permX V.! i `xor` permY V.! j `xor` permZ V.! k)
+noise (Perlin ranfloat permX permY permZ sc) p =
+  let p' = scale sc p
+      i = floor (vecX p')
+      j = floor (vecY p')
+      k = floor (vecZ p')
+      hermite z = z * z * (3 - 2 * z)
+      u = hermite $ vecX p' - fromIntegral (floor $ vecX p')
+      v = hermite $ vecY p' - fromIntegral (floor $ vecY p')
+      w = hermite $ vecZ p' - fromIntegral (floor $ vecZ p')
+      ds = [(di, dj, dk) | di <- [0, 1], dj <- [0, 1], dk <- [0, 1]]
+      rf (di, dj, dk) =
+        ranfloat V.!
+        (permX V.! ((i + di) `mod` pointCount) `xor`
+         permY V.! ((j + dj) `mod` pointCount) `xor`
+         permZ V.! ((k + dk) `mod` pointCount))
+      c =
+        map
+          (\d@(di, dj, dk) ->
+             ((fromIntegral di, fromIntegral dj, fromIntegral dk), rf d))
+          ds
+  in trilinearInterp c u v w
+
+trilinearInterp ::
+     [((Double, Double, Double), Double)]
+  -> Double
+  -> Double
+  -> Double
+  -> Double
+trilinearInterp c u v w =
+  foldr
+    (\((i, j, k), val) acc ->
+       acc +
+       ((i * u + (1 - i) * (1 - u)) *
+        (j * v + (1 - j) * (1 - v)) *
+        (k * w + (1 - k) * (1 - w)) *
+        val))
+    0.0
+    c
 
 textureValue :: Texture -> Double -> Double -> Vec3 -> Albedo
 textureValue (ConstantColor color) _ _ _ = color
@@ -258,7 +281,8 @@ textureValue (CheckerTexture oddTex evenTex) u v p =
   if sin (10 * vecX p) * sin (10 * vecY p) * sin (10 * vecZ p) < 0
   then textureValue oddTex u v p
   else textureValue evenTex u v p
-textureValue ptex u v p = Albedo $ scale (noise ptex p) $ Vec3 (1.0, 1.0, 1.0)
+textureValue ptex@(Perlin _ _ _ _ _) u v p =
+  Albedo $ scale (noise ptex p) $ Vec3 (1.0, 1.0, 1.0)
 
 data Hittable
   = Sphere { sphere_center   :: Vec3
@@ -428,7 +452,7 @@ hit (Aabb bb_min bb_max) r@(Ray or dr tm) t_min t_max =
             in if tmax <= tmin
                  then Nothing
                  else mh)
-    (Just emptyHit)
+    (Just EmptyHit)
     [vecX, vecY, vecZ]
 hit sphere r@(Ray or dr tm) t_min t_max =
   let sc = sphCenter sphere tm
@@ -462,23 +486,10 @@ recHit temp r@(Ray or dr tm) sphere =
           then outwardNormal
           else vecNegate outwardNormal
       pShift = p `vecSub` sc
-      (u, v) = let phi = atan2 (vecZ p) (vecX pShift)
+      (u, v) = let phi = atan2 (vecZ pShift) (vecX pShift)
                    theta = asin (vecY pShift)
-        in (1.0 - (phi + pi) / (2 * pi), (theta + pi / 2) / pi)
+        in (1.0 - ((phi + pi) / (2 * pi)), (theta + (pi / 2)) / pi)
    in Hit temp p n u v frontFace sm
-
-hitSphere :: XYZ -> Double -> Ray -> Double
-hitSphere center radius ray@(Ray or dr _) =
-  let oc = or `vecSub` center
-      a = dot dr dr
-      b = 2.0 * dot oc dr
-      c = dot oc oc - (radius * radius)
-      discriminant = b * b - 4 * a * c
-  in if discriminant < 0.0
-     -- no hits
-     then (-1.0)
-     -- there's a hit
-     else ((-b) - sqrt discriminant) / (2.0 * a)
 
 randomDoubleM :: RandomState s Double
 randomDoubleM = do
@@ -737,7 +748,7 @@ makeTwoPerlinSpheresScene t0 t1 gen =
     worldRef <- newSTRef (Aabb (Vec3 (0, 0, 0)) (Vec3 (0, 0, 0)))
     world <-
       runReaderT
-        (do perText <- makePerlin
+        (do perText <- makePerlin 4.0
             makeBVH
               t0
               t1
