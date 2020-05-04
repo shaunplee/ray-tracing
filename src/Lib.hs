@@ -20,9 +20,11 @@ import           Data.Maybe                    (catMaybes)
 import           Data.Sequence                 (Seq (..))
 import qualified Data.Sequence                 as S
 import           Data.STRef.Lazy
-import           Data.Vector.Unboxed           (Vector (..), enumFromN, freeze,
-                                                thaw)
-import qualified Data.Vector.Unboxed           as V (fromList, (!))
+import qualified Data.Vector                   as VV (Vector (..), fromList,
+                                                      (!))
+import           Data.Vector.Unboxed           (Unbox (..), Vector (..),
+                                                enumFromN, freeze, thaw)
+import qualified Data.Vector.Unboxed           as V ((!))
 import           Data.Vector.Unboxed.Mutable   (MVector (..))
 import qualified Data.Vector.Unboxed.Mutable   as MV (new, swap, write)
 import           Data.Word                     (Word8)
@@ -210,7 +212,7 @@ data Texture
   = ConstantColor { constColor :: Albedo }
   | CheckerTexture { checkerTextureOdd  :: Texture
                    , checkerTextureEven :: Texture }
-  | Perlin { perlinRanFloat :: Vector Double
+  | Perlin { perlinRanFloat :: VV.Vector Vec3
            , perlinPermX    :: Vector Int
            , perlinPermY    :: Vector Int
            , perlinPermZ    :: Vector Int
@@ -223,8 +225,8 @@ pointCount = 256
 
 makePerlin :: Double -> RandomState s Texture
 makePerlin sc = do
-  rds <- replicateM pointCount randomDoubleM
-  Perlin (V.fromList rds) <$> perlinGeneratePerm <*> perlinGeneratePerm <*>
+  rds <- replicateM pointCount (randomVec3DoubleRM (-1.0) 1.0)
+  Perlin (VV.fromList rds) <$> perlinGeneratePerm <*> perlinGeneratePerm <*>
     perlinGeneratePerm <*> return sc
 
 perlinGeneratePerm :: RandomState s (Vector Int)
@@ -239,18 +241,17 @@ perlinGeneratePerm = do
   lift $ strictToLazyST $ freeze p
 
 noise :: Texture -> Vec3 -> Double
-noise (Perlin ranfloat permX permY permZ sc) p =
+noise (Perlin ranvec permX permY permZ sc) p =
   let p' = scale sc p
       i = floor (vecX p')
       j = floor (vecY p')
       k = floor (vecZ p')
-      hermite z = z * z * (3 - 2 * z)
-      u = hermite $ vecX p' - fromIntegral (floor $ vecX p')
-      v = hermite $ vecY p' - fromIntegral (floor $ vecY p')
-      w = hermite $ vecZ p' - fromIntegral (floor $ vecZ p')
+      u = vecX p' - fromIntegral (floor $ vecX p')
+      v = vecY p' - fromIntegral (floor $ vecY p')
+      w = vecZ p' - fromIntegral (floor $ vecZ p')
       ds = [(di, dj, dk) | di <- [0, 1], dj <- [0, 1], dk <- [0, 1]]
       rf (di, dj, dk) =
-        ranfloat V.!
+        ranvec VV.!
         (permX V.! ((i + di) `mod` pointCount) `xor`
          permY V.! ((j + dj) `mod` pointCount) `xor`
          permZ V.! ((k + dk) `mod` pointCount))
@@ -259,24 +260,37 @@ noise (Perlin ranfloat permX permY permZ sc) p =
           (\d@(di, dj, dk) ->
              ((fromIntegral di, fromIntegral dj, fromIntegral dk), rf d))
           ds
-  in trilinearInterp c u v w
+  in perlinInterp c u v w
 
-trilinearInterp ::
-     [((Double, Double, Double), Double)]
+perlinInterp ::
+     [((Double, Double, Double), Vec3)]
   -> Double
   -> Double
   -> Double
   -> Double
-trilinearInterp c u v w =
-  foldr
-    (\((i, j, k), val) acc ->
-       acc +
-       ((i * u + (1 - i) * (1 - u)) *
-        (j * v + (1 - j) * (1 - v)) *
-        (k * w + (1 - k) * (1 - w)) *
-        val))
-    0.0
-    c
+perlinInterp c u v w =
+  let hermite z = z * z * (3 - 2 * z)
+      uu = hermite u
+      vv = hermite v
+      ww = hermite w
+   in foldr
+        (\((i, j, k), val) acc ->
+           acc +
+           ((i * uu + (1 - i) * (1 - uu)) * (j * vv + (1 - j) * (1 - vv)) *
+            (k * ww + (1 - k) * (1 - ww)) *
+            (val `dot` Vec3 (u - i, v - j, w - k))))
+        0.0
+        c
+
+turb :: Texture -> Vec3 -> Int -> Double
+turb ptex p depth =
+  let (accum, _, _) =
+        foldr
+          (\_ (acc, tempP, weight) ->
+             (acc + weight * noise ptex tempP, scale 2.0 tempP, weight * 0.5))
+          (0.0, p, 1.0)
+          [1 .. depth]
+   in abs accum
 
 textureValue :: Texture -> Double -> Double -> Vec3 -> Albedo
 textureValue (ConstantColor color) _ _ _ = color
@@ -284,8 +298,10 @@ textureValue (CheckerTexture oddTex evenTex) u v p =
   if sin (10 * vecX p) * sin (10 * vecY p) * sin (10 * vecZ p) < 0
   then textureValue oddTex u v p
   else textureValue evenTex u v p
-textureValue ptex@(Perlin _ _ _ _ _) u v p =
-  Albedo $ scale (noise ptex p) $ Vec3 (1.0, 1.0, 1.0)
+textureValue ptex@Perlin {} u v p =
+  Albedo $
+  scale (0.5 * (1.0 + sin (vecZ p + 10 * turb ptex p 7))) $
+  Vec3 (1.0, 1.0, 1.0)
 
 data Hittable
   = Sphere { sphere_center   :: Vec3
@@ -763,7 +779,7 @@ makeTwoPerlinSpheresScene t0 t1 gen =
     worldRef <- newSTRef (Aabb (Vec3 (0, 0, 0)) (Vec3 (0, 0, 0)))
     world <-
       runReaderT
-        (do perText <- makePerlin 4.0
+        (do perText <- makePerlin 1.5
             makeBVH
               t0
               t1
