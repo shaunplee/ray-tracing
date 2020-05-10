@@ -27,6 +27,7 @@ library:
   dependencies:
     - containers
     - deepseq
+    - JuicyPixels
     - mtl
     - mersenne-random-pure64
     - parallel

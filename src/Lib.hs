@@ -5,6 +5,11 @@ module Lib
     ( someFunc
     ) where
 
+import qualified Codec.Picture                 as JP (Image (..),
+                                                      PixelRGB8 (..),
+                                                      convertRGB8, imageHeight,
+                                                      imageWidth, pixelAt,
+                                                      readImage)
 import           Control.Applicative           ((<$>))
 import           Control.DeepSeq               (NFData, force, rnf)
 import           Control.Monad                 (foldM)
@@ -30,6 +35,10 @@ import qualified Data.Vector.Unboxed.Mutable   as MV (new, swap, write)
 import           Data.Word                     (Word8)
 import           System.IO                     (hPutStr, stderr)
 import           System.Random.Mersenne.Pure64
+
+-- Epsilon (some smallish number)
+epsilon :: Double
+epsilon = 0.0001
 
 -- Number of threads to use when rendering
 nThreads :: Int
@@ -156,9 +165,15 @@ clamp x min max =
 scaleColor :: Double -> Word8
 scaleColor x = floor $ 256 * clamp (sqrt x) 0.0 0.999
 
-scaleColors :: Albedo -> RGB
-scaleColors (Albedo (Vec3 (x, y, z))) =
+albedoToColor :: Albedo -> RGB
+albedoToColor (Albedo (Vec3 (x, y, z))) =
   RGB (scaleColor x, scaleColor y, scaleColor z)
+
+colorToAlbedo :: RGB -> Albedo
+colorToAlbedo (RGB (r, g, b)) =
+  Albedo
+    (Vec3
+       (fromIntegral r / 255.0, fromIntegral g / 255.0, fromIntegral b / 255.0))
 
 printRow :: (Int, [RGB]) -> IO ()
 printRow (i, row) = do
@@ -218,7 +233,13 @@ data Texture
            , perlinPermZ    :: Vector Int
            , perlinScale    :: Double
            }
+  | ImageTexture { imageTexture_image  :: Maybe (JP.Image JP.PixelRGB8)
+                 , imageTexture_width  :: Int
+                 , imageTexture_height :: Int}
   deriving Show
+
+instance Show (JP.Image a) where
+  show x = "<Image>"
 
 pointCount :: Int
 pointCount = 256
@@ -298,10 +319,19 @@ textureValue (CheckerTexture oddTex evenTex) u v p =
   if sin (10 * vecX p) * sin (10 * vecY p) * sin (10 * vecZ p) < 0
   then textureValue oddTex u v p
   else textureValue evenTex u v p
-textureValue ptex@Perlin {} u v p =
-  Albedo $
-  scale (0.5 * (1.0 + sin (vecZ p + 10 * turb ptex p 7))) $
-  Vec3 (1.0, 1.0, 1.0)
+textureValue ptex@Perlin{} u v p =
+  Albedo $ scale (marbleTexture ptex p) $ Vec3 (1.0, 1.0, 1.0)
+textureValue (ImageTexture (Just im) nx ny) u v p =
+  let nxd                  = fromIntegral nx
+      i                    = floor $ clamp 0 (nxd - epsilon) (u * nxd)
+      nyd                  = fromIntegral ny
+      j = floor $ clamp 0 (nyd - epsilon) ((1.0 - v) * nyd - epsilon)
+      (JP.PixelRGB8 r g b) = JP.pixelAt im i j
+  in  colorToAlbedo (RGB (r, g, b))
+textureValue (ImageTexture Nothing _ _) _ _ _ = Albedo $ Vec3 (0, 1, 1)
+
+marbleTexture :: Texture -> Vec3 -> Double
+marbleTexture ptex p = 0.5 * (1.0 + sin (vecZ p + 10 * turb ptex p 7))
 
 data Hittable
   = Sphere { sphere_center   :: Vec3
@@ -666,11 +696,11 @@ rayColor r depth = rayColorHelp r depth (Albedo $ Vec3 (1.0, 1.0, 1.0))
                Just h -> do
                  mscatter <- scatter (hit_material h) r h
                  case mscatter of
-                   Just (sray, Albedo alb) ->
-                     rayColorHelp
-                       sray
-                       (depth - 1)
-                       (Albedo $ alb_acc `vecMul` alb)
+                   Just (sray, Albedo alb) -> return $ Albedo alb
+                     -- rayColorHelp
+                     --   sray
+                     --   (depth - 1)
+                     --   (Albedo $ alb_acc `vecMul` alb)
                    Nothing -> return $ Albedo $ Vec3 (0.0, 0.0, 0.0)
                Nothing ->
                  let unitDirection = makeUnitVector (ray_direction r)
@@ -717,8 +747,10 @@ someFunc = do
   let pp = pixelPositions imageWidth imageHeight
   --gen <- newPureMT
   let gen = pureMT 1024 -- Fix a seed for comparable performance tests
+  et <- earthTexture
+  let (world, g1) = makeEarthScene et 0.0 1.0 gen
   --let (world, g1) = makeRandomScene 0.0 1.0 gen
-  let (world, g1) = makeTwoPerlinSpheresScene 0.0 1.0 gen
+  --let (world, g1) = makeTwoPerlinSpheresScene 0.0 1.0 gen
   let camera = randomSceneCamera
   gs <- replicateM (nThreads - 1) newPureMT
   let gens = g1 : gs
@@ -727,7 +759,7 @@ someFunc = do
         gensRef <- newSTRef gens
         mapM
           (\rowPs ->
-             map scaleColors <$>
+             map albedoToColor <$>
              parallelRenderRow rowPs world camera gensRef)
           pp
   mapM_ printRow (zip [1 .. imageHeight] vals)
@@ -758,6 +790,34 @@ parallelRenderRow rowps world camera gsRef = do
       (zipWith (\(Albedo a1) (Albedo a2) -> Albedo $ vecAdd a1 a2))
       (replicate imageWidth (Albedo $ Vec3 (0.0, 0.0, 0.0)))
       sampleGroups
+
+earthTexture :: IO Texture
+earthTexture = do
+  earthImg <- JP.readImage "./earthmap.jpg"
+  let (earthIm, w, h) = case earthImg of
+        Left  e -> (Nothing, 0, 0)
+        Right x -> let im = JP.convertRGB8 x
+                   in (Just im, JP.imageWidth im, JP.imageHeight im)
+  return $ ImageTexture earthIm w h
+
+makeEarthScene :: Texture -> Time -> Time -> PureMT -> (Scene, PureMT)
+makeEarthScene earthTex t0 t1 gen = runST $ do
+  gRef     <- newSTRef gen
+  worldRef <- newSTRef (Aabb (Vec3 (0, 0, 0)) (Vec3 (0, 0, 0)))
+  world    <- runReaderT
+    (makeBVH
+      t0
+      t1
+      (   Sphere (Vec3 (0, -1000, 0))
+                 1000
+                 (Lambertian (ConstantColor $ Albedo $ Vec3 (0.2, 0.3, 0.1)))
+      :<| Sphere (Vec3 (0, 2, 0)) 2 (Lambertian earthTex)
+      :<| Empty
+      )
+    )
+    (worldRef, twoSpheresSceneCamera, gRef)
+  g1 <- readSTRef gRef
+  return (world, g1)
 
 twoSpheresSceneCamera :: Camera
 twoSpheresSceneCamera =
