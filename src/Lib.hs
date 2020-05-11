@@ -2,7 +2,16 @@
 {-# LANGUAGE TupleSections #-}
 
 module Lib
-    ( runRender
+    ( makeRandomScene
+    , makeTwoPerlinSpheresScene
+    , makeTwoSpheresScene
+    , mkRenderStaticEnv
+    , newPureMT
+    , printRow
+    , pureMT
+    , randomSceneCamera
+    , runRender
+    , twoSpheresSceneCamera
     ) where
 
 import           Control.Applicative           ((<$>))
@@ -31,27 +40,6 @@ import           Data.Word                     (Word8)
 import           System.IO                     (hPutStr, stderr)
 import           System.Random.Mersenne.Pure64
 
--- Number of threads to use when rendering
-defaultnThreads :: Int
-defaultnThreads = 2
-
--- Number of samples to use when anti-aliasing
-defaultNs :: Int
-defaultNs = 100
-
--- nsPerThread :: Int
--- nsPerThread = ns `div` nThreads
-
--- maximum number of reflections
-defaultMaxDepth :: Int
-defaultMaxDepth = 50
-
--- X and Y dimensions of output image
-defaultImageWidth :: Int
-defaultImageWidth = 600
-defaultImageHeight :: Int
-defaultImageHeight = 400
-
 infinity :: Double
 infinity = read "Infinity" :: Double
 
@@ -60,10 +48,6 @@ type Scene = Hittable
 
 -- Use the ST monad to thread the random number generator
 type RandomState s = ReaderT (RenderEnv s) (ST s)
-
--- data RenderEnv s = RenderEnv { env_scene  :: STRef s Scene
---                              , env_camera :: Camera
---                              , env_gen    :: STRef s PureMT}
 
 newtype RenderStaticEnv =
   RenderStaticEnv (Scene, Camera, (Int, Int), Int, Int, Int, Int)
@@ -82,6 +66,28 @@ mkRenderStaticEnv s c (width, height) numSamples maxDepth numThreads =
 
 getStaticImageWidth :: RenderStaticEnv -> Int
 getStaticImageWidth (RenderStaticEnv (_, _, (width, _), _, _, _, _)) = width
+
+getStaticImageHeight :: RenderStaticEnv -> Int
+getStaticImageHeight (RenderStaticEnv (_, _, (_, height), _, _, _, _)) = height
+
+getStaticNumThreads :: RenderStaticEnv -> Int
+getStaticNumThreads (RenderStaticEnv (_, _, _, _, _, numThreads, _)) =
+  numThreads
+
+fakeSplit :: PureMT -> (PureMT, PureMT)
+fakeSplit gen = let (newSeed, gen1) = randomWord64 gen
+                in (gen1, pureMT newSeed)
+
+replicatePureMT :: Int -> PureMT -> [PureMT]
+replicatePureMT n gen =
+  let (g, res) =
+        foldr
+          (\_ (g, acc) ->
+             let (g1, g2) = fakeSplit g
+              in (g1, g2 : acc))
+          (gen, [])
+          [1 .. n - 1]
+   in g : res
 
 newtype RenderEnv s =
   RenderEnv ( RenderStaticEnv
@@ -119,12 +125,10 @@ getCamera :: RenderEnv s -> Camera
 getCamera (RenderEnv (RenderStaticEnv (_, cam, _, _, _, _, _), _)) = cam
 
 getImageWidth :: RenderEnv s -> Int
-getImageWidth (RenderEnv (RenderStaticEnv (_, _, (width, _), _, _, _, _), _)) =
-  width
+getImageWidth (RenderEnv (staticEnv, _)) = getStaticImageWidth staticEnv
 
 getImageHeight :: RenderEnv s -> Int
-getImageHeight (RenderEnv (RenderStaticEnv (_, _, (_, height), _, _, _, _), _))
-  = height
+getImageHeight (RenderEnv (staticEnv, _)) = getStaticImageHeight staticEnv
 
 getNumSamples :: RenderEnv s -> Int
 getNumSamples (RenderEnv (RenderStaticEnv (_, _, _, numSamples, _, _, _), _)) =
@@ -133,10 +137,6 @@ getNumSamples (RenderEnv (RenderStaticEnv (_, _, _, numSamples, _, _, _), _)) =
 getMaxDepth :: RenderEnv s -> Int
 getMaxDepth (RenderEnv (RenderStaticEnv (_, _, _, _, maxDepth, _, _), _)) =
   maxDepth
-
-getNumThreads :: RenderEnv s -> Int
-getNumThreads (RenderEnv (RenderStaticEnv (_, _, _, _, _, numThreads, _), _)) =
-  numThreads
 
 getNsPerThread :: RenderEnv s -> Int
 getNsPerThread (RenderEnv (RenderStaticEnv (_, _, _, _, _, _, nsPerThread), _))
@@ -784,40 +784,22 @@ renderRow = mapM renderPos
 pixelPositions :: Int -> Int -> [[(Int, Int)]]
 pixelPositions nx ny = map (\y -> map (, y) [0 .. nx - 1]) [ny - 1,ny - 2 .. 0]
 
-runRender :: IO ()
-runRender = do
-  let imageWidth = defaultImageWidth
-  let imageHeight = defaultImageHeight
-  putStrLn "P3"
-  putStrLn $ show imageWidth ++ " " ++ show imageHeight
-  putStrLn "255"
-  let pp = pixelPositions imageWidth imageHeight
-  --gen <- newPureMT
-  let gen = pureMT 1024 -- Fix a seed for comparable performance tests
-  let (world, g1) = makeRandomScene 0.0 1.0 gen
-  --let (world, g1) = makeTwoPerlinSpheresScene 0.0 1.0 gen
-  let camera = randomSceneCamera (imageWidth, imageHeight)
-  gs <- replicateM (defaultnThreads - 1) newPureMT
-  let gens = g1 : gs
-  let vals =
-        runST $ do
-          gensRef <- newSTRef gens
-          mapM
-            (\rowPs ->
-               map scaleColors <$>
-               parallelRenderRow
-                 rowPs
-                 (mkRenderStaticEnv
-                    world
-                    camera
-                    (imageWidth, imageHeight)
-                    defaultNs
-                    defaultMaxDepth
-                    defaultnThreads)
-                 gensRef)
-            pp
-  mapM_ (printRow imageHeight) (zip [1 .. imageHeight] vals)
-  hPutStr stderr "\nDone.\n"
+runRender :: RenderStaticEnv -> PureMT -> [[RGB]]
+runRender staticEnv gen =
+  let imageWidth = getStaticImageWidth staticEnv
+      imageHeight = getStaticImageHeight staticEnv
+      pp = pixelPositions imageWidth imageHeight
+      gens = replicatePureMT (getStaticNumThreads staticEnv) gen
+   in runST $ do
+        gensRef <- newSTRef gens
+        mapM
+          (\rowPs ->
+             map scaleColors <$>
+             parallelRenderRow
+               rowPs
+               staticEnv
+               gensRef)
+          pp
 
 parallelRenderRow ::
      [(Int, Int)]
@@ -862,7 +844,6 @@ makeTwoPerlinSpheresScene :: Time -> Time -> PureMT -> (Scene, PureMT)
 makeTwoPerlinSpheresScene t0 t1 gen =
   runST $ do
     gRef <- newSTRef gen
-    worldRef <- newSTRef (Aabb (Vec3 (0, 0, 0)) (Vec3 (0, 0, 0)))
     world <-
       runReaderT
         (do perText <- makePerlin 1.5
@@ -888,7 +869,6 @@ makeTwoSpheresScene t0 t1 gen =
     let flatMaterial =
           Lambertian (ConstantColor $ Albedo $ Vec3 (0.6, 0.2, 0.1))
     gRef <- newSTRef gen
-    worldRef <- newSTRef (Aabb (Vec3 (0, 0, 0)) (Vec3 (0, 0, 0)))
     world <-
       runReaderT
         (makeBVH
