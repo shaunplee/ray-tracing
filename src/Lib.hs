@@ -112,11 +112,13 @@ dummyCamera =
     0.0
     1.0
 
-dummyRenderEnv :: STRef s PureMT -> RenderEnv s
-dummyRenderEnv gRef =
+dummyRenderStaticEnv :: RenderStaticEnv
+dummyRenderStaticEnv =
   let world = Aabb (Vec3 (0, 0, 0)) (Vec3 (0, 0, 0))
-      static = mkRenderStaticEnv world dummyCamera (0, 0) 0 0 0
-   in mkRenderEnv static gRef
+   in mkRenderStaticEnv world dummyCamera (0, 0) 0 0 0
+
+dummyRenderEnv :: STRef s PureMT -> RenderEnv s
+dummyRenderEnv gRef = mkRenderEnv dummyRenderStaticEnv gRef
 
 getScene :: RenderEnv s -> Scene
 getScene (RenderEnv (RenderStaticEnv (scn, _, _, _, _, _, _), _)) = scn
