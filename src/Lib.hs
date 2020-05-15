@@ -396,11 +396,11 @@ textureValue (CheckerTexture oddTex evenTex) u v p =
   else textureValue evenTex u v p
 textureValue ptex@Perlin{} u v p =
   Albedo $ scale (marbleTexture ptex p) $ Vec3 (1.0, 1.0, 1.0)
-textureValue (ImageTexture (Just im) nx ny) u v p =
-  let nxd                  = fromIntegral nx
-      i                    = floor $ clamp 0 (nxd - epsilon) (u * nxd)
-      nyd                  = fromIntegral ny
-      j = floor $ clamp 0 (nyd - epsilon) ((1.0 - v) * nyd - epsilon)
+textureValue (ImageTexture (Just im) nx ny) u v _ =
+  let nxd  = fromIntegral nx
+      i    = floor $ clamp (u * nxd) 0 (nxd - epsilon)
+      nyd  = fromIntegral ny
+      j    = floor $ clamp ((1.0 - v) * nyd - epsilon) 0 (nyd - epsilon)
       (JP.PixelRGB8 r g b) = JP.pixelAt im i j
   in  colorToAlbedo (RGB (r, g, b))
 textureValue (ImageTexture Nothing _ _) _ _ _ = Albedo $ Vec3 (0, 1, 1)
@@ -870,23 +870,19 @@ earthTexture = do
   return $ ImageTexture earthIm w h
 
 makeEarthScene :: Texture -> Time -> Time -> PureMT -> (Scene, PureMT)
-makeEarthScene earthTex t0 t1 gen = runST $ do
-  gRef     <- newSTRef gen
-  worldRef <- newSTRef (Aabb (Vec3 (0, 0, 0)) (Vec3 (0, 0, 0)))
-  world    <- runReaderT
-    (makeBVH
-      t0
-      t1
-      (   Sphere (Vec3 (0, -1000, 0))
-                 1000
-                 (Lambertian (ConstantColor $ Albedo $ Vec3 (0.2, 0.3, 0.1)))
-      :<| Sphere (Vec3 (0, 2, 0)) 2 (Lambertian earthTex)
-      :<| Empty
-      )
-    )
-    (dummyRenderEnv gRef)
-  g1 <- readSTRef gRef
-  return (world, g1)
+makeEarthScene earthTex t0 t1 gen =
+  runST $ do
+    gRef <- newSTRef gen
+    worldRef <- newSTRef (Aabb (Vec3 (0, 0, 0)) (Vec3 (0, 0, 0)))
+    world <-
+      runReaderT
+        (makeBVH
+           t0
+           t1
+           (Sphere (Vec3 (0, 0, 0)) 2 (Lambertian earthTex) :<| Empty))
+        (dummyRenderEnv gRef)
+    g1 <- readSTRef gRef
+    return (world, g1)
 
 twoSpheresSceneCamera :: (Int, Int) -> Camera
 twoSpheresSceneCamera (imageWidth, imageHeight) =

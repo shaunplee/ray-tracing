@@ -34,9 +34,9 @@ main = do
   putStrLn "255"
   let gen = pureMT 1024 -- Fix a seed for comparable performance tests
   --let (world, g1) = makeRandomScene 0.0 1.0 gen
-  --et <- earthTexture
-  --let (world, g1) = makeEarthScene et 0.0 1.0 gen
-  let (world, g1) = makeTwoPerlinSpheresScene 0.0 1.0 gen
+  et <- earthTexture
+  let (world, g1) = makeEarthScene et 0.0 1.0 gen
+  --let (world, g1) = makeTwoPerlinSpheresScene 0.0 1.0 gen
   gs <- replicateM (defaultnThreads - 1) newPureMT
   let gens = g1 : gs
   let camera = randomSceneCamera (imageWidth, imageHeight)
