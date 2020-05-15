@@ -952,8 +952,8 @@ randomSceneCamera (imageWidth, imageHeight) =
     1.0
 
 -- |Generate the image from the cover of the book with lots of spheres
-makeRandomScene :: Time -> Time -> PureMT -> (Scene, PureMT)
-makeRandomScene t0 t1 gen =
+makeRandomScene :: Texture -> Time -> Time -> PureMT -> (Scene, PureMT)
+makeRandomScene earthtex t0 t1 gen =
   runST $ do
     gRef <- newSTRef gen
     world <- runReaderT makeSceneM (dummyRenderEnv gRef)
@@ -978,7 +978,8 @@ makeRandomScene t0 t1 gen =
             Sphere
               (Vec3 (-4.0, 1.0, 0.0))
               1.0
-              (Lambertian (ConstantColor $ Albedo $ Vec3 (0.4, 0.2, 0.1)))
+              -- (Lambertian (ConstantColor $ Albedo $ Vec3 (0.4, 0.2, 0.1)))
+              (Lambertian earthtex)
       let s3 =
             Sphere
               (Vec3 (4.0, 1.0, 0.0))
