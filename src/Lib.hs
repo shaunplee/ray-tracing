@@ -118,7 +118,7 @@ dummyRenderStaticEnv =
    in mkRenderStaticEnv world dummyCamera (0, 0) 0 0 0
 
 dummyRenderEnv :: STRef s PureMT -> RenderEnv s
-dummyRenderEnv gRef = mkRenderEnv dummyRenderStaticEnv gRef
+dummyRenderEnv = mkRenderEnv dummyRenderStaticEnv
 
 getScene :: RenderEnv s -> Scene
 getScene (RenderEnv (RenderStaticEnv (scn, _, _, _, _, _, _), _)) = scn
@@ -786,12 +786,11 @@ renderRow = mapM renderPos
 pixelPositions :: Int -> Int -> [[(Int, Int)]]
 pixelPositions nx ny = map (\y -> map (, y) [0 .. nx - 1]) [ny - 1,ny - 2 .. 0]
 
-runRender :: RenderStaticEnv -> PureMT -> [[RGB]]
-runRender staticEnv gen =
+runRender :: RenderStaticEnv -> [PureMT] -> [[RGB]]
+runRender staticEnv gens =
   let imageWidth = getStaticImageWidth staticEnv
       imageHeight = getStaticImageHeight staticEnv
       pp = pixelPositions imageWidth imageHeight
-      gens = replicatePureMT (getStaticNumThreads staticEnv) gen
    in runST $ do
         gensRef <- newSTRef gens
         mapM

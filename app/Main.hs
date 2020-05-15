@@ -1,7 +1,8 @@
 module Main where
 
+import           Control.Monad (replicateM)
 import           Lib
-import           System.IO (hPutStr, stderr)
+import           System.IO     (hPutStr, stderr)
 
 -- X and Y dimensions of output image
 defaultImageWidth :: Int
@@ -32,8 +33,10 @@ main = do
   putStrLn $ show imageWidth ++ " " ++ show imageHeight
   putStrLn "255"
   let gen = pureMT 1024 -- Fix a seed for comparable performance tests
-  let (world, g1) = makeRandomScene 0.0 1.0 gen
-  -- (world, g1) = makeTwoPerlinSpheresScene 0.0 1.0 gen
+  --let (world, g1) = makeRandomScene 0.0 1.0 gen
+  let (world, g1) = makeTwoPerlinSpheresScene 0.0 1.0 gen
+  gs <- replicateM (defaultnThreads - 1) newPureMT
+  let gens = g1 : gs
   let camera = randomSceneCamera (imageWidth, imageHeight)
   let staticEnv =
         mkRenderStaticEnv
@@ -42,7 +45,7 @@ main = do
           (imageWidth, imageHeight)
           defaultNs
           defaultMaxDepth
-          defaultnThreads
-  let vals = runRender staticEnv g1
+          (length gens)
+  let vals = runRender staticEnv gens
   mapM_ (printRow imageHeight) (zip [1 .. imageHeight] vals)
   hPutStr stderr "\nDone.\n"
