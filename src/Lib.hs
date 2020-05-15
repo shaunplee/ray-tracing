@@ -232,14 +232,14 @@ cross :: Vec3 -> Vec3 -> Vec3
 cross (Vec3 (x1, y1, z1)) (Vec3 (x2, y2, z2)) =
   Vec3 (y1 * z2 - z1 * y2, z1 * x2 - x1 * z2, x1 * y2 - y1 * x2)
 
-clamp :: Double -> Double -> Double -> Double
-clamp x min max =
+clamp :: (Double, Double) -> Double -> Double
+clamp (min, max) x =
   if | x < min -> min
      | x > max -> max
      | otherwise -> x
 
 scaleColor :: Double -> Word8
-scaleColor x = floor $ 256 * clamp (sqrt x) 0.0 0.999
+scaleColor x = floor $ 256 * clamp (0.0, 0.999) (sqrt x)
 
 albedoToColor :: Albedo -> RGB
 albedoToColor (Albedo (Vec3 (x, y, z))) =
@@ -398,9 +398,9 @@ textureValue ptex@Perlin{} u v p =
   Albedo $ scale (marbleTexture ptex p) $ Vec3 (1.0, 1.0, 1.0)
 textureValue (ImageTexture (Just im) nx ny) u v _ =
   let nxd  = fromIntegral nx
-      i    = floor $ clamp (u * nxd) 0 (nxd - epsilon)
+      i    = floor $ clamp (0, nxd - epsilon) (u * nxd)
       nyd  = fromIntegral ny
-      j    = floor $ clamp ((1.0 - v) * nyd - epsilon) 0 (nyd - epsilon)
+      j    = floor $ clamp (0, nyd - epsilon) ((1.0 - v) * nyd - epsilon)
       (JP.PixelRGB8 r g b) = JP.pixelAt im i j
   in  colorToAlbedo (RGB (r, g, b))
 textureValue (ImageTexture Nothing _ _) _ _ _ = Albedo $ Vec3 (0, 1, 1)
