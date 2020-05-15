@@ -2,7 +2,18 @@
 {-# LANGUAGE TupleSections #-}
 
 module Lib
-    ( someFunc
+    ( earthTexture
+    , makeEarthScene
+    , makeRandomScene
+    , makeTwoPerlinSpheresScene
+    , makeTwoSpheresScene
+    , mkRenderStaticEnv
+    , newPureMT
+    , printRow
+    , pureMT
+    , randomSceneCamera
+    , runRender
+    , twoSpheresSceneCamera
     ) where
 
 import qualified Codec.Picture                 as JP (Image (..),
@@ -40,27 +51,6 @@ import           System.Random.Mersenne.Pure64
 epsilon :: Double
 epsilon = 0.0001
 
--- Number of threads to use when rendering
-nThreads :: Int
-nThreads = 2
-
--- Number of samples to use when anti-aliasing
-ns :: Int
-ns = 100
-
-nsPerThread :: Int
-nsPerThread = ns `div` nThreads
-
--- maximum number of reflections
-maxDepth :: Int
-maxDepth = 50
-
--- X and Y dimensions of output image
-imageWidth :: Int
-imageWidth = 600
-imageHeight :: Int
-imageHeight = 400
-
 infinity :: Double
 infinity = read "Infinity" :: Double
 
@@ -68,19 +58,105 @@ infinity = read "Infinity" :: Double
 type Scene = Hittable
 
 -- Use the ST monad to thread the random number generator
-type RandomState s = ReaderT (STRef s Scene, Camera, STRef s PureMT) (ST s)
+type RandomState s = ReaderT (RenderEnv s) (ST s)
 
-getGenRef :: RandomState s (STRef s PureMT)
-getGenRef = do (_, _, genRef) <- ask
-               return genRef
+newtype RenderStaticEnv =
+  RenderStaticEnv (Scene, Camera, (Int, Int), Int, Int, Int, Int)
 
-getCamera :: RandomState s Camera
-getCamera = do (_, cam, _) <- ask
-               return cam
+mkRenderStaticEnv ::
+     Scene -> Camera -> (Int, Int) -> Int -> Int -> Int -> RenderStaticEnv
+mkRenderStaticEnv s c (width, height) numSamples maxDepth numThreads =
+  RenderStaticEnv
+    ( s
+    , c
+    , (width, height)
+    , numSamples
+    , maxDepth
+    , numThreads
+    , numSamples `div` numThreads)
 
-getSceneRef :: RandomState s (STRef s Scene)
-getSceneRef = do (worldRef, _, _) <- ask
-                 return worldRef
+getStaticImageWidth :: RenderStaticEnv -> Int
+getStaticImageWidth (RenderStaticEnv (_, _, (width, _), _, _, _, _)) = width
+
+getStaticImageHeight :: RenderStaticEnv -> Int
+getStaticImageHeight (RenderStaticEnv (_, _, (_, height), _, _, _, _)) = height
+
+getStaticNumThreads :: RenderStaticEnv -> Int
+getStaticNumThreads (RenderStaticEnv (_, _, _, _, _, numThreads, _)) =
+  numThreads
+
+fakeSplit :: PureMT -> (PureMT, PureMT)
+fakeSplit gen = let (newSeed, gen1) = randomWord64 gen
+                in (gen1, pureMT newSeed)
+
+replicatePureMT :: Int -> PureMT -> [PureMT]
+replicatePureMT n gen =
+  let (g, res) =
+        foldr
+          (\_ (g, acc) ->
+             let (g1, g2) = fakeSplit g
+              in (g1, g2 : acc))
+          (gen, [])
+          [1 .. n - 1]
+   in g : res
+
+newtype RenderEnv s =
+  RenderEnv ( RenderStaticEnv
+            , STRef s PureMT)
+
+mkRenderEnv :: RenderStaticEnv -> STRef s PureMT -> RenderEnv s
+mkRenderEnv renderStaticEnv g =
+  RenderEnv
+    ( renderStaticEnv
+    , g)
+
+dummyCamera :: Camera
+dummyCamera =
+  newCamera
+    (Vec3 (13.0, 2.0, 3.0))
+    (Vec3 (0.0, 0.0, 0.0))
+    (Vec3 (0.0, 1.0, 0.0))
+    20.0
+    (4 / 3)
+    0.1
+    10.0
+    0.0
+    1.0
+
+dummyRenderStaticEnv :: RenderStaticEnv
+dummyRenderStaticEnv =
+  let world = Aabb (Vec3 (0, 0, 0)) (Vec3 (0, 0, 0))
+   in mkRenderStaticEnv world dummyCamera (0, 0) 0 0 0
+
+dummyRenderEnv :: STRef s PureMT -> RenderEnv s
+dummyRenderEnv = mkRenderEnv dummyRenderStaticEnv
+
+getScene :: RenderEnv s -> Scene
+getScene (RenderEnv (RenderStaticEnv (scn, _, _, _, _, _, _), _)) = scn
+
+getCamera :: RenderEnv s -> Camera
+getCamera (RenderEnv (RenderStaticEnv (_, cam, _, _, _, _, _), _)) = cam
+
+getImageWidth :: RenderEnv s -> Int
+getImageWidth (RenderEnv (staticEnv, _)) = getStaticImageWidth staticEnv
+
+getImageHeight :: RenderEnv s -> Int
+getImageHeight (RenderEnv (staticEnv, _)) = getStaticImageHeight staticEnv
+
+getNumSamples :: RenderEnv s -> Int
+getNumSamples (RenderEnv (RenderStaticEnv (_, _, _, numSamples, _, _, _), _)) =
+  numSamples
+
+getMaxDepth :: RenderEnv s -> Int
+getMaxDepth (RenderEnv (RenderStaticEnv (_, _, _, _, maxDepth, _, _), _)) =
+  maxDepth
+
+getNsPerThread :: RenderEnv s -> Int
+getNsPerThread (RenderEnv (RenderStaticEnv (_, _, _, _, _, _, nsPerThread), _))
+  = nsPerThread
+
+getGenRef :: RenderEnv s -> STRef s PureMT
+getGenRef (RenderEnv (_, genRef)) = genRef
 
 instance NFData PureMT where
   rnf x = seq x ()
@@ -175,14 +251,13 @@ colorToAlbedo (RGB (r, g, b)) =
     (Vec3
        (fromIntegral r / 255.0, fromIntegral g / 255.0, fromIntegral b / 255.0))
 
-printRow :: (Int, [RGB]) -> IO ()
-printRow (i, row) = do
+printRow :: Int -> (Int, [RGB]) -> IO ()
+printRow imageHeight (i, row) = do
   hPutStr stderr ("\rRendering row " ++ show i ++ " of " ++ show imageHeight)
   putStrLn $ showRow row
 
 showRow :: [RGB] -> String
 showRow row = unwords $ fmap show row
-
 
 data Ray = Ray
   { ray_origin    :: XYZ
@@ -542,7 +617,7 @@ recHit temp r@(Ray or dr tm) sphere =
 
 randomDoubleM :: RandomState s Double
 randomDoubleM = do
-  gRef <- getGenRef
+  gRef <- asks getGenRef
   g1 <- lift $ readSTRef gRef
   let (x, g2) = randomDouble g1
   lift $ writeSTRef gRef g2
@@ -558,7 +633,7 @@ randomIntRM lo hi = floor <$> randomDoubleRM (fromIntegral lo) (fromIntegral hi)
 
 randomVec3DoubleM :: RandomState s Vec3
 randomVec3DoubleM = do
-  gRef <- getGenRef
+  gRef <- asks getGenRef
   gen <- lift $ readSTRef gRef
   let (x, g1) = randomDouble gen
   let (y, g2) = randomDouble g1
@@ -575,7 +650,7 @@ randomVec3DoubleRM min max = do
 
 randomInUnitSphereM :: RandomState s Vec3
 randomInUnitSphereM = do
-  gRef <- getGenRef
+  gRef <- asks getGenRef
   gen <- lift $ readSTRef gRef
   let (rUnit, gen1) = randomInUnitSphere gen
   lift $ writeSTRef gRef gen1
@@ -593,7 +668,7 @@ randomInUnitSphere gen =
 
 randomInUnitDiskM :: RandomState s Vec3
 randomInUnitDiskM = do
-  gRef <- getGenRef
+  gRef <- asks getGenRef
   gen <- lift $ readSTRef gRef
   let (rUnit, gen1) = randomInUnitDisk gen
   lift $ writeSTRef gRef gen1
@@ -610,7 +685,7 @@ randomInUnitDisk gen =
 
 randomUnitVectorM :: RandomState s Vec3
 randomUnitVectorM = do
-  gRef <- getGenRef
+  gRef <- asks getGenRef
   gen <- lift $ readSTRef gRef
   let (aa, g1) = randomDouble gen
   let a = aa * 2 * pi
@@ -688,8 +763,7 @@ rayColor r depth = rayColorHelp r depth (Albedo $ Vec3 (1.0, 1.0, 1.0))
   where
     rayColorHelp :: Ray -> Int -> Albedo -> RayTracingM s Albedo
     rayColorHelp r depth (Albedo alb_acc) = do
-      worldRef <- getSceneRef
-      htbls <- lift $ readSTRef worldRef
+      htbls <- asks getScene
       if depth <= 0
         then return $ Albedo $ Vec3 (0.0, 0.0, 0.0)
         else case hit htbls r 0.001 infinity of
@@ -712,13 +786,16 @@ rayColor r depth = rayColorHelp r depth (Albedo $ Vec3 (1.0, 1.0, 1.0))
 
 sampleColor :: (Int, Int) -> Albedo -> Int -> RayTracingM s Albedo
 sampleColor (x, y) (Albedo accCol) _ = do
-  gRef <- getGenRef
+  gRef <- asks getGenRef
   gen <- lift $ readSTRef gRef
+  maxDepth <- asks getMaxDepth
   let (ru, g1) = randomDouble gen
   let (rv, g2) = randomDouble g1
+  imageWidth <- asks getImageWidth
+  imageHeight <- asks getImageHeight
   let u = (fromIntegral x + ru) / fromIntegral imageWidth
   let v = (fromIntegral y + rv) / fromIntegral imageHeight
-  camera <- getCamera
+  camera <- asks getCamera
   r <- getRay camera u v
   lift $ writeSTRef gRef g2
   (Albedo c1) <- rayColor r maxDepth
@@ -726,6 +803,8 @@ sampleColor (x, y) (Albedo accCol) _ = do
 
 renderPos :: (Int, Int) -> RayTracingM s Albedo
 renderPos (x, y) = do
+  nsPerThread <- asks getNsPerThread
+  ns <- asks getNumSamples
   (Albedo summedColor) <-
     foldM
       (sampleColor (x, y))
@@ -739,57 +818,47 @@ renderRow = mapM renderPos
 pixelPositions :: Int -> Int -> [[(Int, Int)]]
 pixelPositions nx ny = map (\y -> map (, y) [0 .. nx - 1]) [ny - 1,ny - 2 .. 0]
 
-someFunc :: IO ()
-someFunc = do
-  putStrLn "P3"
-  putStrLn $ show imageWidth ++ " " ++ show imageHeight
-  putStrLn "255"
-  let pp = pixelPositions imageWidth imageHeight
-  --gen <- newPureMT
-  let gen = pureMT 1024 -- Fix a seed for comparable performance tests
-  et <- earthTexture
-  let (world, g1) = makeEarthScene et 0.0 1.0 gen
-  --let (world, g1) = makeRandomScene 0.0 1.0 gen
-  --let (world, g1) = makeTwoPerlinSpheresScene 0.0 1.0 gen
-  let camera = randomSceneCamera
-  gs <- replicateM (nThreads - 1) newPureMT
-  let gens = g1 : gs
-  let vals =
-        runST $ do
+runRender :: RenderStaticEnv -> [PureMT] -> [[RGB]]
+runRender staticEnv gens =
+  let imageWidth = getStaticImageWidth staticEnv
+      imageHeight = getStaticImageHeight staticEnv
+      pp = pixelPositions imageWidth imageHeight
+   in runST $ do
         gensRef <- newSTRef gens
         mapM
           (\rowPs ->
              map albedoToColor <$>
-             parallelRenderRow rowPs world camera gensRef)
+             parallelRenderRow
+               rowPs
+               staticEnv
+               gensRef)
           pp
-  mapM_ printRow (zip [1 .. imageHeight] vals)
-  hPutStr stderr "\nDone.\n"
 
 parallelRenderRow ::
-     [(Int, Int)] -> Scene -> Camera -> STRef s [PureMT] -> ST s [Albedo]
-parallelRenderRow rowps world camera gsRef = do
+     [(Int, Int)]
+  -> RenderStaticEnv
+  -> STRef s [PureMT]
+  -> ST s [Albedo]
+parallelRenderRow rowps staticEnv gsRef = do
   gs <- readSTRef gsRef
-  let (sampleGroups, newGs) =
-        unzip $
-        parMap
-          rpar
-          (\gen ->
-             force $
-             runST $ do
-               worldRef <- newSTRef world
-               genRef <- newSTRef gen
-               runReaderT
-                 (do row <- renderRow rowps
-                     g <- lift $ readSTRef genRef
-                     return (row, g))
-                 (worldRef, camera, genRef))
-          gs
+  let (sampleGroups, newGs) = unzip $ parMap
+        rpar
+        (\gen -> force $ runST $ do
+          genRef <- newSTRef gen
+          runReaderT
+            (do
+              row <- renderRow rowps
+              g   <- lift $ readSTRef genRef
+              return (row, g)
+            )
+            (mkRenderEnv staticEnv genRef)
+        )
+        gs
   writeSTRef gsRef newGs
-  return $
-    foldl'
-      (zipWith (\(Albedo a1) (Albedo a2) -> Albedo $ vecAdd a1 a2))
-      (replicate imageWidth (Albedo $ Vec3 (0.0, 0.0, 0.0)))
-      sampleGroups
+  return $ foldl'
+    (zipWith (\(Albedo a1) (Albedo a2) -> Albedo $ vecAdd a1 a2))
+    (replicate (getStaticImageWidth staticEnv) (Albedo $ Vec3 (0.0, 0.0, 0.0)))
+    sampleGroups
 
 earthTexture :: IO Texture
 earthTexture = do
@@ -815,12 +884,12 @@ makeEarthScene earthTex t0 t1 gen = runST $ do
       :<| Empty
       )
     )
-    (worldRef, twoSpheresSceneCamera, gRef)
+    (dummyRenderEnv gRef)
   g1 <- readSTRef gRef
   return (world, g1)
 
-twoSpheresSceneCamera :: Camera
-twoSpheresSceneCamera =
+twoSpheresSceneCamera :: (Int, Int) -> Camera
+twoSpheresSceneCamera (imageWidth, imageHeight) =
   newCamera
     (Vec3 (13.0, 2.0, 3.0))
     (Vec3 (0.0, 0.0, 0.0))
@@ -836,7 +905,6 @@ makeTwoPerlinSpheresScene :: Time -> Time -> PureMT -> (Scene, PureMT)
 makeTwoPerlinSpheresScene t0 t1 gen =
   runST $ do
     gRef <- newSTRef gen
-    worldRef <- newSTRef (Aabb (Vec3 (0, 0, 0)) (Vec3 (0, 0, 0)))
     world <-
       runReaderT
         (do perText <- makePerlin 1.5
@@ -846,7 +914,7 @@ makeTwoPerlinSpheresScene t0 t1 gen =
               (Sphere (Vec3 (0, -1000, 0)) 1000 (Lambertian perText) :<|
                Sphere (Vec3 (0, 2, 0)) 2 (Lambertian perText) :<|
                Empty))
-        (worldRef, twoSpheresSceneCamera, gRef)
+        (dummyRenderEnv gRef)
     g1 <- readSTRef gRef
     return (world, g1)
 
@@ -862,7 +930,6 @@ makeTwoSpheresScene t0 t1 gen =
     let flatMaterial =
           Lambertian (ConstantColor $ Albedo $ Vec3 (0.6, 0.2, 0.1))
     gRef <- newSTRef gen
-    worldRef <- newSTRef (Aabb (Vec3 (0, 0, 0)) (Vec3 (0, 0, 0)))
     world <-
       runReaderT
         (makeBVH
@@ -871,12 +938,12 @@ makeTwoSpheresScene t0 t1 gen =
            (Sphere (Vec3 (0, -10, 0)) 10 checkerMaterial :<|
             Sphere (Vec3 (0, 10, 0)) 10 flatMaterial :<|
             Empty))
-        (worldRef, twoSpheresSceneCamera, gRef)
+        (dummyRenderEnv gRef)
     g1 <- readSTRef gRef
     return (world, g1)
 
-randomSceneCamera :: Camera
-randomSceneCamera =
+randomSceneCamera :: (Int, Int) -> Camera
+randomSceneCamera (imageWidth, imageHeight) =
   newCamera
     (Vec3 (13.0, 2.0, 3.0))
     (Vec3 (0.0, 0.0, 0.0))
@@ -893,9 +960,7 @@ makeRandomScene :: Time -> Time -> PureMT -> (Scene, PureMT)
 makeRandomScene t0 t1 gen =
   runST $ do
     gRef <- newSTRef gen
-    -- dummy world to satisfy RandomState:
-    worldRef <- newSTRef (Aabb (Vec3 (0, 0, 0)) (Vec3 (0, 0, 0)))
-    world <- runReaderT makeSceneM (worldRef, randomSceneCamera, gRef)
+    world <- runReaderT makeSceneM (dummyRenderEnv gRef)
     g1 <- readSTRef gRef
     return (world, g1)
   where
