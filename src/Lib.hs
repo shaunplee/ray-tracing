@@ -770,11 +770,11 @@ rayColor r depth = rayColorHelp r depth (Albedo $ Vec3 (1.0, 1.0, 1.0))
                Just h -> do
                  mscatter <- scatter (hit_material h) r h
                  case mscatter of
-                   Just (sray, Albedo alb) -> return $ Albedo alb
-                     -- rayColorHelp
-                     --   sray
-                     --   (depth - 1)
-                     --   (Albedo $ alb_acc `vecMul` alb)
+                   Just (sray, Albedo alb) ->
+                     rayColorHelp
+                       sray
+                       (depth - 1)
+                       (Albedo $ alb_acc `vecMul` alb)
                    Nothing -> return $ Albedo $ Vec3 (0.0, 0.0, 0.0)
                Nothing ->
                  let unitDirection = makeUnitVector (ray_direction r)
