@@ -85,21 +85,6 @@ getStaticNumThreads :: RenderStaticEnv -> Int
 getStaticNumThreads (RenderStaticEnv (_, _, _, _, _, numThreads, _)) =
   numThreads
 
-
--- fakeSplit gen = let (newSeed, gen1) = randomWord64 gen
---                 in (gen1, pureMT newSeed)
-
--- replicatePureMT :: Int -> PureMT -> [PureMT]
--- replicatePureMT n gen =
---   let (g, res) =
---         foldr
---           (\_ (g, acc) ->
---              let (g1, g2) = fakeSplit g
---               in (g1, g2 : acc))
---           (gen, [])
---           [1 .. n - 1]
---    in g : res
-
 newtype RenderEnv s =
   RenderEnv ( RenderStaticEnv
             , STRef s PureMT)
