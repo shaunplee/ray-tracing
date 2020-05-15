@@ -48,7 +48,8 @@ packages:
 # extra-package-dbs: []
 
 ghc-options:
-  "$everything": -O2 -fexcess-precision -optc-ffast-math -threaded -rtsopts
+  "$everything": -O2
+  "$targets": -Wall -fexcess-precision -optc-ffast-math -threaded -rtsopts
 
 # Control whether we use the GHC we find on the path
 # system-ghc: true
