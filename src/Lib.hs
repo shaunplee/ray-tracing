@@ -8,9 +8,9 @@ module Lib
     , makeTwoPerlinSpheresScene
     , makeTwoSpheresScene
     , mkRenderStaticEnv
-    , newPureMT
+    , newRandGen
     , printRow
-    , pureMT
+    , randGen
     , randomSceneCamera
     , runRender
     , twoSpheresSceneCamera
@@ -25,27 +25,22 @@ import           Control.Applicative           ((<$>))
 import           Control.DeepSeq               (NFData, force, rnf)
 import           Control.Monad                 (foldM)
 import           Control.Monad.Reader
-import           Control.Monad.ST.Lazy         (ST (..), runST, strictToLazyST)
+import           Control.Monad.ST.Lazy         (ST, runST, strictToLazyST)
 import           Control.Monad.Trans           (lift)
-import           Control.Parallel
-import           Control.Parallel.Strategies   (Eval, parMap, rpar)
-import           Data.Bits                     (xor, (.&.))
+import           Control.Parallel.Strategies   (parMap, rpar)
+import           Data.Bits                     (xor)
 import           Data.Foldable                 (foldl')
-import           Data.List                     (intercalate)
 import           Data.Maybe                    (catMaybes)
 import           Data.Sequence                 (Seq (..))
 import qualified Data.Sequence                 as S
 import           Data.STRef.Lazy
-import qualified Data.Vector                   as VV (Vector (..), fromList,
-                                                      (!))
-import           Data.Vector.Unboxed           (Unbox (..), Vector (..),
-                                                enumFromN, freeze, thaw)
+import qualified Data.Vector                   as VV (Vector, fromList, (!))
+import           Data.Vector.Unboxed           (Vector, enumFromN, freeze, thaw)
 import qualified Data.Vector.Unboxed           as V ((!))
-import           Data.Vector.Unboxed.Mutable   (MVector (..))
-import qualified Data.Vector.Unboxed.Mutable   as MV (new, swap, write)
-import           Data.Word                     (Word8)
+import qualified Data.Vector.Unboxed.Mutable   as MV (swap)
+import           Data.Word                     (Word64, Word8)
 import           System.IO                     (hPutStr, stderr)
-import           System.Random.Mersenne.Pure64
+import qualified System.Random.Mersenne.Pure64 as MT
 
 -- Epsilon (some smallish number)
 epsilon :: Double
@@ -81,15 +76,19 @@ getStaticImageWidth (RenderStaticEnv (_, _, (width, _), _, _, _, _)) = width
 getStaticImageHeight :: RenderStaticEnv -> Int
 getStaticImageHeight (RenderStaticEnv (_, _, (_, height), _, _, _, _)) = height
 
-getStaticNumThreads :: RenderStaticEnv -> Int
-getStaticNumThreads (RenderStaticEnv (_, _, _, _, _, numThreads, _)) =
-  numThreads
+newtype RandGen = RandGen MT.PureMT
+
+newRandGen :: IO RandGen
+newRandGen = do RandGen <$> MT.newPureMT
+
+randGen :: Word64 -> RandGen
+randGen s = RandGen (MT.pureMT s)
 
 newtype RenderEnv s =
   RenderEnv ( RenderStaticEnv
-            , STRef s PureMT)
+            , STRef s RandGen)
 
-mkRenderEnv :: RenderStaticEnv -> STRef s PureMT -> RenderEnv s
+mkRenderEnv :: RenderStaticEnv -> STRef s RandGen -> RenderEnv s
 mkRenderEnv renderStaticEnv g =
   RenderEnv
     ( renderStaticEnv
@@ -110,10 +109,14 @@ dummyCamera =
 
 dummyRenderStaticEnv :: RenderStaticEnv
 dummyRenderStaticEnv =
-  let world = Aabb (Vec3 (0, 0, 0)) (Vec3 (0, 0, 0))
+  let world =
+        Sphere
+          (Vec3 (0, 0, 0))
+          1.0
+          (Lambertian $ ConstantColor $ Albedo $ Vec3 (0, 1.0, 1.0))
    in mkRenderStaticEnv world dummyCamera (0, 0) 0 0 0
 
-dummyRenderEnv :: STRef s PureMT -> RenderEnv s
+dummyRenderEnv :: STRef s RandGen -> RenderEnv s
 dummyRenderEnv = mkRenderEnv dummyRenderStaticEnv
 
 getScene :: RenderEnv s -> Scene
@@ -140,11 +143,11 @@ getNsPerThread :: RenderEnv s -> Int
 getNsPerThread (RenderEnv (RenderStaticEnv (_, _, _, _, _, _, nsPerThread), _))
   = nsPerThread
 
-getGenRef :: RenderEnv s -> STRef s PureMT
+getGenRef :: RenderEnv s -> STRef s RandGen
 getGenRef (RenderEnv (_, genRef)) = genRef
 
-instance NFData PureMT where
-  rnf x = seq x ()
+instance NFData RandGen where
+  rnf (RandGen pmt) = seq pmt ()
 
 type RayTracingM s = RandomState s
 
@@ -218,9 +221,9 @@ cross (Vec3 (x1, y1, z1)) (Vec3 (x2, y2, z2)) =
   Vec3 (y1 * z2 - z1 * y2, z1 * x2 - x1 * z2, x1 * y2 - y1 * x2)
 
 clamp :: (Double, Double) -> Double -> Double
-clamp (min, max) x =
-  if | x < min -> min
-     | x > max -> max
+clamp (mn, mx) x =
+  if | x < mn -> mn
+     | x > mx -> mx
      | otherwise -> x
 
 scaleColor :: Double -> Word8
@@ -251,7 +254,7 @@ data Ray = Ray
   } deriving Show
 
 at :: Ray -> Double -> XYZ
-at (Ray or dr _) t = or `vecAdd` scale t dr
+at (Ray orn dr _) t = orn `vecAdd` scale t dr
 
 data Hit
   = Hit { hit_t         :: Double
@@ -283,6 +286,16 @@ newtype Albedo = Albedo Vec3
 instance NFData Albedo where
   rnf (Albedo v) = rnf v `seq` ()
 
+newtype Image = Image (JP.Image JP.PixelRGB8)
+
+pixelAt :: Image -> Int -> Int -> RGB
+pixelAt (Image im) i j =
+  let (JP.PixelRGB8 r g b) = JP.pixelAt im i j
+   in RGB (r, g, b)
+
+instance Show Image where
+  show _ = "<Image>"
+
 data Texture
   = ConstantColor { constColor :: Albedo }
   | CheckerTexture { checkerTextureOdd  :: Texture
@@ -293,13 +306,10 @@ data Texture
            , perlinPermZ    :: Vector Int
            , perlinScale    :: Double
            }
-  | ImageTexture { imageTexture_image  :: Maybe (JP.Image JP.PixelRGB8)
+  | ImageTexture { imageTexture_image  :: Maybe Image
                  , imageTexture_width  :: Int
                  , imageTexture_height :: Int}
   deriving Show
-
-instance Show (JP.Image a) where
-  show x = "<Image>"
 
 pointCount :: Int
 pointCount = 256
@@ -314,7 +324,7 @@ perlinGeneratePerm :: RandomState s (Vector Int)
 perlinGeneratePerm = do
   p <- lift $ strictToLazyST $ thaw $ enumFromN 0 pointCount
   foldM_
-    (\mv i -> do
+    (\_ i -> do
        target <- randomIntRM 0 i
        lift $ strictToLazyST $ MV.swap p i target)
     ()
@@ -327,9 +337,9 @@ noise (Perlin ranvec permX permY permZ sc) p =
       i = floor (vecX p')
       j = floor (vecY p')
       k = floor (vecZ p')
-      u = vecX p' - fromIntegral (floor $ vecX p')
-      v = vecY p' - fromIntegral (floor $ vecY p')
-      w = vecZ p' - fromIntegral (floor $ vecZ p')
+      u = vecX p' - fromIntegral (floor $ vecX p' :: Int)
+      v = vecY p' - fromIntegral (floor $ vecY p' :: Int)
+      w = vecZ p' - fromIntegral (floor $ vecZ p' :: Int)
       ds = [(di, dj, dk) | di <- [0, 1], dj <- [0, 1], dk <- [0, 1]]
       rf (di, dj, dk) =
         ranvec VV.!
@@ -342,6 +352,9 @@ noise (Perlin ranvec permX permY permZ sc) p =
              ((fromIntegral di, fromIntegral dj, fromIntegral dk), rf d))
           ds
   in perlinInterp c u v w
+noise (ConstantColor _) _ = undefined
+noise (CheckerTexture _ _) _ = undefined
+noise (ImageTexture {}) _ = undefined
 
 perlinInterp ::
      [((Double, Double, Double), Vec3)]
@@ -379,15 +392,14 @@ textureValue (CheckerTexture oddTex evenTex) u v p =
   if sin (10 * vecX p) * sin (10 * vecY p) * sin (10 * vecZ p) < 0
   then textureValue oddTex u v p
   else textureValue evenTex u v p
-textureValue ptex@Perlin{} u v p =
+textureValue ptex@Perlin{} _ _ p =
   Albedo $ scale (marbleTexture ptex p) $ Vec3 (1.0, 1.0, 1.0)
 textureValue (ImageTexture (Just im) nx ny) u v _ =
-  let nxd  = fromIntegral nx
-      i    = floor $ clamp (0, nxd - epsilon) (u * nxd)
-      nyd  = fromIntegral ny
-      j    = floor $ clamp (0, nyd - epsilon) ((1.0 - v) * nyd - epsilon)
-      (JP.PixelRGB8 r g b) = JP.pixelAt im i j
-  in  colorToAlbedo (RGB (r, g, b))
+  let nxd = fromIntegral nx
+      i = floor $ clamp (0, nxd - epsilon) (u * nxd)
+      nyd = fromIntegral ny
+      j = floor $ clamp (0, nyd - epsilon) ((1.0 - v) * nyd - epsilon)
+   in colorToAlbedo $ pixelAt im i j
 textureValue (ImageTexture Nothing _ _) _ _ _ = Albedo $ Vec3 (0, 1, 1)
 
 marbleTexture :: Texture -> Vec3 -> Double
@@ -403,8 +415,6 @@ data Hittable
                  , msphere_time1    :: Time
                  , msphere_radius   :: Double
                  , msphere_material :: Material }
-  | Aabb { aabb_min :: Vec3
-         , aabb_max :: Vec3 }
   | BVHNode {bvh_left   :: Hittable
             , bvh_right :: Hittable
             , bvh_box   :: Box}
@@ -415,14 +425,26 @@ data Box = Box
   , box_max :: Vec3
   } deriving (Show)
 
-boxToAabb :: Box -> Hittable
-boxToAabb (Box bmin bmax) = Aabb bmin bmax
+hitBox :: Box -> Ray -> Double -> Double -> Bool
+hitBox (Box bb_min bb_max) (Ray ror rdr _) t_min t_max =
+  any
+    (\cur_axis ->
+       let c_or = cur_axis ror
+           c_dr = cur_axis rdr
+           c_bb_min = cur_axis bb_min
+           c_bb_max = cur_axis bb_max
+           t0 = min ((c_bb_min - c_or) / c_dr) ((c_bb_max - c_or) / c_dr)
+           t1 = max ((c_bb_min - c_or) / c_dr) ((c_bb_max - c_or) / c_dr)
+           tmin = max t0 t_min
+           tmax = min t1 t_max
+        in tmax > tmin)
+    [vecX, vecY, vecZ]
 
 type Time = Double
 
 sphCenter :: Hittable -> Double -> Vec3
-sphCenter (Sphere c r _) _ = c
-sphCenter (MovingSphere c0 c1 t0 t1 r m) t =
+sphCenter (Sphere c _ _) _ = c
+sphCenter (MovingSphere c0 c1 t0 t1 _ _) t =
   c0 `vecAdd` scale ((t - t0) / (t1 - t0)) (c1 `vecSub` c0)
 
 sphRadius :: Hittable -> Double
@@ -446,7 +468,7 @@ scatter (Metal tex (Fuzz fuzz)) rin (Hit _ hp hn hu hv _ _) = do
   return $ if dot (ray_direction scattered) hn > 0.0
            then Just (scattered, textureValue tex hu hv hp)
            else Nothing
-scatter (Dielectric (RefractiveIdx ref_idx)) rin (Hit _ hp hn hu hv hff _) = do
+scatter (Dielectric (RefractiveIdx ref_idx)) rin (Hit _ hp hn _ _ hff _) = do
   let albedo = Albedo $ Vec3 (1.0, 1.0, 1.0)
   let etaiOverEtat =
         if hff
@@ -462,6 +484,7 @@ scatter (Dielectric (RefractiveIdx ref_idx)) rin (Hit _ hp hn hu hv hff _) = do
             in Just (Ray hp reflected (ray_time rin), albedo)
       else let refracted = refract unitDirection hn etaiOverEtat
             in Just (Ray hp refracted (ray_time rin), albedo)
+scatter _ _ _ = error "scattering off unhittable object"
 
 reflect :: XYZ -> XYZ -> XYZ
 reflect v n = v `vecSub` scale (2.0 * dot v n) n
@@ -476,21 +499,20 @@ refract v n etaiOverEtat =
 
 -- Christopher Schlick approximation for reflectivity of glass based on angle
 schlick :: Double -> Double -> Double
-schlick cos ref_idx =
+schlick cosine ref_idx =
   let r0 = (1.0 - ref_idx) / (1.0 + ref_idx)
       r1 = r0 * r0
-   in r1 + (1.0 - r1) * (1 - cos) ** 5
+   in r1 + (1.0 - r1) * (1 - cosine) ** 5
 
 boundingBox :: Hittable -> Double -> Double -> Box
 boundingBox (Sphere c r _) _ _ =
   let rad = Vec3 (r, r, r)
    in Box (c `vecSub` rad) (c `vecAdd` rad)
-boundingBox (MovingSphere c0 c1 ms_t0 ms_t1 r _) t0 t1 =
+boundingBox (MovingSphere c0 c1 _ _ r _) _ _ =
   let rad = Vec3 (r, r, r)
       box0 = Box (c0 `vecSub` rad) (c0 `vecAdd` rad)
       box1 = Box (c1 `vecSub` rad) (c1 `vecAdd` rad)
    in surroundingBox box0 box1
-boundingBox (Aabb ab_min ab_max) _ _ = Box ab_min ab_max
 boundingBox (BVHNode _ _ box) _ _ = box
 
 surroundingBox :: Box -> Box -> Box
@@ -534,41 +556,25 @@ boxCompare compAxis t0 t1 boxa boxb =
     (compAxis (box_min (boundingBox boxb t0 t1)))
 
 hit :: Hittable -> Ray -> Double -> Double -> Maybe Hit
-hit (BVHNode bvh_l bvh_r box) r@(Ray or dr tm) t_min t_max =
-  case hit (boxToAabb box) r t_min t_max of
-    Nothing -> Nothing
-    Just _ ->
-      case hit bvh_l r t_min t_max of -- try to hit left branch
-        Nothing -> hit bvh_r r t_min t_max -- no hits, try right branch
-        Just hitLeft@(Hit t _ _ _ _ _ _) -> -- left branch hit
-          case hit bvh_r r t_min t of -- is there a closer right branch hit?
-            Nothing       -> Just hitLeft -- no, take hit from left branch
-            Just hitRight -> Just hitRight -- yes, take hit from right branch
-hit (Aabb bb_min bb_max) r@(Ray or dr tm) t_min t_max =
-  foldr
-    (\cur_axis mh ->
-       case mh of
-         Nothing -> Nothing
-         _ ->
-           let c_or = cur_axis or
-               c_dr = cur_axis dr
-               c_bb_min = cur_axis bb_min
-               c_bb_max = cur_axis bb_max
-               t0 = min ((c_bb_min - c_or) / c_dr) ((c_bb_max - c_or) / c_dr)
-               t1 = max ((c_bb_min - c_or) / c_dr) ((c_bb_max - c_or) / c_dr)
-               tmin = max t0 t_min
-               tmax = min t1 t_max
-            in if tmax <= tmin
-                 then Nothing
-                 else mh)
-    (Just EmptyHit)
-    [vecX, vecY, vecZ]
-hit sphere r@(Ray or dr tm) t_min t_max =
+hit (BVHNode bvh_l bvh_r box) r t_min t_max =
+  if hitBox box r t_min t_max
+    then case hit bvh_l r t_min t_max -- try to hit left branch
+               of
+           Nothing -> hit bvh_r r t_min t_max -- no hits, try right branch
+           Just EmptyHit -> error "Should not hit an Aabb"
+           Just hitLeft@(Hit t _ _ _ _ _ _) -- left branch hit
+            ->
+             case hit bvh_r r t_min t -- is there a closer right branch hit?
+                   of
+               Nothing       -> Just hitLeft -- no, take hit from left branch
+               Just hitRight -> Just hitRight -- yes, take hit from right branch
+    else Nothing
+hit sphere r@(Ray ror rdr tm) t_min t_max =
   let sc = sphCenter sphere tm
       sr = sphRadius sphere
-      oc = or `vecSub` sc
-      a = dot dr dr
-      b = seq oc (dot oc dr)
+      oc = ror `vecSub` sc
+      a = dot rdr rdr
+      b = seq oc (dot oc rdr)
       c = seq sr (dot oc oc - (sr * sr))
       discriminant = b * b - a * c
    in if discriminant > 0
@@ -583,7 +589,7 @@ hit sphere r@(Ray or dr tm) t_min t_max =
         else Nothing
 
 recHit :: Double -> Ray -> Hittable -> Hit
-recHit temp r@(Ray or dr tm) sphere =
+recHit temp r@(Ray _ dr tm) sphere =
   let sc = sphCenter sphere tm
       sr = sphRadius sphere
       sm = sphMaterial sphere
@@ -603,15 +609,15 @@ recHit temp r@(Ray or dr tm) sphere =
 randomDoubleM :: RandomState s Double
 randomDoubleM = do
   gRef <- asks getGenRef
-  g1 <- lift $ readSTRef gRef
-  let (x, g2) = randomDouble g1
-  lift $ writeSTRef gRef g2
+  (RandGen g1) <- lift $ readSTRef gRef
+  let (x, g2) = MT.randomDouble g1
+  lift $ writeSTRef gRef (RandGen g2)
   return x
 
 randomDoubleRM :: Double -> Double -> RandomState s Double
-randomDoubleRM min max = do
+randomDoubleRM mn mx = do
   rd <- randomDoubleM
-  return $ min + (max - min) * rd
+  return $ mn + (mx - mn) * rd
 
 randomIntRM :: Int -> Int -> RandomState s Int
 randomIntRM lo hi = floor <$> randomDoubleRM (fromIntegral lo) (fromIntegral hi)
@@ -619,18 +625,18 @@ randomIntRM lo hi = floor <$> randomDoubleRM (fromIntegral lo) (fromIntegral hi)
 randomVec3DoubleM :: RandomState s Vec3
 randomVec3DoubleM = do
   gRef <- asks getGenRef
-  gen <- lift $ readSTRef gRef
-  let (x, g1) = randomDouble gen
-  let (y, g2) = randomDouble g1
-  let (z, g3) = randomDouble g2
-  lift $ writeSTRef gRef g3
+  (RandGen gen) <- lift $ readSTRef gRef
+  let (x, g1) = MT.randomDouble gen
+  let (y, g2) = MT.randomDouble g1
+  let (z, g3) = MT.randomDouble g2
+  lift $ writeSTRef gRef (RandGen g3)
   return $ Vec3 (x, y, z)
 
 randomVec3DoubleRM :: Double -> Double -> RandomState s Vec3
-randomVec3DoubleRM min max = do
-  x <- randomDoubleRM min max
-  y <- randomDoubleRM min max
-  z <- randomDoubleRM min max
+randomVec3DoubleRM mn mx = do
+  x <- randomDoubleRM mn mx
+  y <- randomDoubleRM mn mx
+  z <- randomDoubleRM mn mx
   return $ Vec3 (x, y, z)
 
 randomInUnitSphereM :: RandomState s Vec3
@@ -641,15 +647,15 @@ randomInUnitSphereM = do
   lift $ writeSTRef gRef gen1
   return rUnit
 
-randomInUnitSphere :: PureMT -> (Vec3, PureMT)
-randomInUnitSphere gen =
-  let (x, g1) = randomDouble gen
-      (y, g2) = randomDouble g1
-      (z, g3) = randomDouble g2
+randomInUnitSphere :: RandGen -> (Vec3, RandGen)
+randomInUnitSphere (RandGen gen) =
+  let (x, g1) = MT.randomDouble gen
+      (y, g2) = MT.randomDouble g1
+      (z, g3) = MT.randomDouble g2
       p = scale 2.0 (Vec3 (x, y, z)) `vecSub` Vec3 (1.0, 1.0, 1.0)
    in if squaredLength p < 1.0
-        then (p, g3)
-        else randomInUnitSphere g3
+        then (p, RandGen g3)
+        else randomInUnitSphere (RandGen g3)
 
 randomInUnitDiskM :: RandomState s Vec3
 randomInUnitDiskM = do
@@ -659,25 +665,25 @@ randomInUnitDiskM = do
   lift $ writeSTRef gRef gen1
   return rUnit
 
-randomInUnitDisk :: PureMT -> (Vec3, PureMT)
-randomInUnitDisk gen =
-  let (x, g1) = randomDouble gen
-      (y, g2) = randomDouble g1
+randomInUnitDisk :: RandGen -> (Vec3, RandGen)
+randomInUnitDisk (RandGen gen) =
+  let (x, g1) = MT.randomDouble gen
+      (y, g2) = MT.randomDouble g1
       p = scale 2.0 (Vec3 (x, y, 0)) `vecSub` Vec3 (1.0, 1.0, 0)
    in if squaredLength p < 1.0
-        then (p, g2)
-        else randomInUnitDisk g2
+        then (p, RandGen g2)
+        else randomInUnitDisk $ RandGen g2
 
 randomUnitVectorM :: RandomState s Vec3
 randomUnitVectorM = do
   gRef <- asks getGenRef
-  gen <- lift $ readSTRef gRef
-  let (aa, g1) = randomDouble gen
+  (RandGen gen) <- lift $ readSTRef gRef
+  let (aa, g1) = MT.randomDouble gen
   let a = aa * 2 * pi
-  let (zz, g2) = randomDouble g1
+  let (zz, g2) = MT.randomDouble g1
   let z = (zz * 2) - 1
   let r = sqrt (1 - z * z)
-  lift $ writeSTRef gRef g2
+  lift $ writeSTRef gRef $ RandGen g2
   return $ Vec3 (r * cos a, r * sin a, z)
 
 randomInHemisphereM :: XYZ -> RandomState s Vec3
@@ -744,12 +750,12 @@ newCamera lookfrom lookat vup vfov aspect aperture focusDist t0 t1 =
    in Camera origin lowerLeftCorner horizontal vertical u v w lensRadius t0 t1
 
 rayColor :: Ray -> Int -> RayTracingM s Albedo
-rayColor r depth = rayColorHelp r depth (Albedo $ Vec3 (1.0, 1.0, 1.0))
+rayColor ray depth = rayColorHelp ray depth (Albedo $ Vec3 (1.0, 1.0, 1.0))
   where
     rayColorHelp :: Ray -> Int -> Albedo -> RayTracingM s Albedo
-    rayColorHelp r depth (Albedo alb_acc) = do
+    rayColorHelp r d (Albedo alb_acc) = do
       htbls <- asks getScene
-      if depth <= 0
+      if d <= 0
         then return $ Albedo $ Vec3 (0.0, 0.0, 0.0)
         else case hit htbls r 0.001 infinity of
                Just h -> do
@@ -758,7 +764,7 @@ rayColor r depth = rayColorHelp r depth (Albedo $ Vec3 (1.0, 1.0, 1.0))
                    Just (sray, Albedo alb) ->
                      rayColorHelp
                        sray
-                       (depth - 1)
+                       (d - 1)
                        (Albedo $ alb_acc `vecMul` alb)
                    Nothing -> return $ Albedo $ Vec3 (0.0, 0.0, 0.0)
                Nothing ->
@@ -772,17 +778,17 @@ rayColor r depth = rayColorHelp r depth (Albedo $ Vec3 (1.0, 1.0, 1.0))
 sampleColor :: (Int, Int) -> Albedo -> Int -> RayTracingM s Albedo
 sampleColor (x, y) (Albedo accCol) _ = do
   gRef <- asks getGenRef
-  gen <- lift $ readSTRef gRef
+  (RandGen gen) <- lift $ readSTRef gRef
   maxDepth <- asks getMaxDepth
-  let (ru, g1) = randomDouble gen
-  let (rv, g2) = randomDouble g1
+  let (ru, g1) = MT.randomDouble gen
+  let (rv, g2) = MT.randomDouble g1
   imageWidth <- asks getImageWidth
   imageHeight <- asks getImageHeight
   let u = (fromIntegral x + ru) / fromIntegral imageWidth
   let v = (fromIntegral y + rv) / fromIntegral imageHeight
   camera <- asks getCamera
   r <- getRay camera u v
-  lift $ writeSTRef gRef g2
+  lift $ writeSTRef gRef $ RandGen g2
   (Albedo c1) <- rayColor r maxDepth
   return $ Albedo $ accCol `vecAdd` c1
 
@@ -803,7 +809,7 @@ renderRow = mapM renderPos
 pixelPositions :: Int -> Int -> [[(Int, Int)]]
 pixelPositions nx ny = map (\y -> map (, y) [0 .. nx - 1]) [ny - 1,ny - 2 .. 0]
 
-runRender :: RenderStaticEnv -> [PureMT] -> [[RGB]]
+runRender :: RenderStaticEnv -> [RandGen] -> [[RGB]]
 runRender staticEnv gens =
   let imageWidth = getStaticImageWidth staticEnv
       imageHeight = getStaticImageHeight staticEnv
@@ -822,7 +828,7 @@ runRender staticEnv gens =
 parallelRenderRow ::
      [(Int, Int)]
   -> RenderStaticEnv
-  -> STRef s [PureMT]
+  -> STRef s [RandGen]
   -> ST s [Albedo]
 parallelRenderRow rowps staticEnv gsRef = do
   gs <- readSTRef gsRef
@@ -849,16 +855,15 @@ earthTexture :: IO Texture
 earthTexture = do
   earthImg <- JP.readImage "./earthmap.jpg"
   let (earthIm, w, h) = case earthImg of
-        Left  e -> (Nothing, 0, 0)
+        Left  _ -> (Nothing, 0, 0)
         Right x -> let im = JP.convertRGB8 x
-                   in (Just im, JP.imageWidth im, JP.imageHeight im)
+                   in (Just (Image im), JP.imageWidth im, JP.imageHeight im)
   return $ ImageTexture earthIm w h
 
-makeEarthScene :: Texture -> Time -> Time -> PureMT -> (Scene, PureMT)
+makeEarthScene :: Texture -> Time -> Time -> RandGen -> (Scene, RandGen)
 makeEarthScene earthTex t0 t1 gen =
   runST $ do
     gRef <- newSTRef gen
-    worldRef <- newSTRef (Aabb (Vec3 (0, 0, 0)) (Vec3 (0, 0, 0)))
     world <-
       runReaderT
         (makeBVH
@@ -882,7 +887,7 @@ twoSpheresSceneCamera (imageWidth, imageHeight) =
     0.0
     1.0
 
-makeTwoPerlinSpheresScene :: Time -> Time -> PureMT -> (Scene, PureMT)
+makeTwoPerlinSpheresScene :: Time -> Time -> RandGen -> (Scene, RandGen)
 makeTwoPerlinSpheresScene t0 t1 gen =
   runST $ do
     gRef <- newSTRef gen
@@ -899,7 +904,7 @@ makeTwoPerlinSpheresScene t0 t1 gen =
     g1 <- readSTRef gRef
     return (world, g1)
 
-makeTwoSpheresScene :: Time -> Time -> PureMT -> (Scene, PureMT)
+makeTwoSpheresScene :: Time -> Time -> RandGen -> (Scene, RandGen)
 makeTwoSpheresScene t0 t1 gen =
   runST $ do
     let checkerMaterial =
@@ -937,8 +942,8 @@ randomSceneCamera (imageWidth, imageHeight) =
     1.0
 
 -- |Generate the image from the cover of the book with lots of spheres
-makeRandomScene :: Texture -> Time -> Time -> PureMT -> (Scene, PureMT)
-makeRandomScene earthtex t0 t1 gen =
+makeRandomScene :: Texture -> Time -> Time -> RandGen -> (Scene, RandGen)
+makeRandomScene earthtex _ _ gen =
   runST $ do
     gRef <- newSTRef gen
     world <- runReaderT makeSceneM (dummyRenderEnv gRef)

@@ -18,9 +18,6 @@ defaultnThreads = 2
 defaultNs :: Int
 defaultNs = 100
 
--- nsPerThread :: Int
--- nsPerThread = ns `div` nThreads
-
 -- maximum number of reflections
 defaultMaxDepth :: Int
 defaultMaxDepth = 50
@@ -32,12 +29,12 @@ main = do
   putStrLn "P3"
   putStrLn $ show imageWidth ++ " " ++ show imageHeight
   putStrLn "255"
-  let gen = pureMT 1024 -- Fix a seed for comparable performance tests
+  let gen = randGen 1024 -- Fix a seed for comparable performance tests
   et <- earthTexture
   let (world, g1) = makeRandomScene et 0.0 1.0 gen
   --let (world, g1) = makeEarthScene et 0.0 1.0 gen
   --let (world, g1) = makeTwoPerlinSpheresScene 0.0 1.0 gen
-  gs <- replicateM (defaultnThreads - 1) newPureMT
+  gs <- replicateM (defaultnThreads - 1) newRandGen
   let gens = g1 : gs
   let camera = randomSceneCamera (imageWidth, imageHeight)
   let staticEnv =
