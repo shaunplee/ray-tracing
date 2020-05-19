@@ -425,8 +425,8 @@ data Box = Box
   , box_max :: Vec3
   } deriving (Show)
 
-hitBox :: Box -> Ray -> Double -> Double -> Bool
-hitBox (Box bb_min bb_max) (Ray ror rdr _) t_min t_max =
+boxRayIntersect :: Box -> Ray -> Double -> Double -> Bool
+boxRayIntersect (Box bb_min bb_max) (Ray ror rdr _) t_min t_max =
   foldr
     (\cur_axis acc ->
        if acc
@@ -563,7 +563,7 @@ boxCompare compAxis t0 t1 boxa boxb =
 
 hit :: Hittable -> Ray -> Double -> Double -> Maybe Hit
 hit (BVHNode bvh_l bvh_r box) r t_min t_max =
-  if hitBox box r t_min t_max
+  if boxRayIntersect box r t_min t_max
     then case hit bvh_l r t_min t_max -- try to hit left branch
                of
            Nothing -> hit bvh_r r t_min t_max -- no hits, try right branch
