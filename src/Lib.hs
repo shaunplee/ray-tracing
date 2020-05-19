@@ -427,17 +427,20 @@ data Box = Box
 
 hitBox :: Box -> Ray -> Double -> Double -> Bool
 hitBox (Box bb_min bb_max) (Ray ror rdr _) t_min t_max =
-  any
-    (\cur_axis ->
-       let c_or = cur_axis ror
-           c_dr = cur_axis rdr
-           c_bb_min = cur_axis bb_min
-           c_bb_max = cur_axis bb_max
-           t0 = min ((c_bb_min - c_or) / c_dr) ((c_bb_max - c_or) / c_dr)
-           t1 = max ((c_bb_min - c_or) / c_dr) ((c_bb_max - c_or) / c_dr)
-           tmin = max t0 t_min
-           tmax = min t1 t_max
-        in tmax > tmin)
+  foldr
+    (\cur_axis acc ->
+       if acc
+         then let c_or = cur_axis ror
+                  c_dr = cur_axis rdr
+                  c_bb_min = cur_axis bb_min
+                  c_bb_max = cur_axis bb_max
+                  t0 = min ((c_bb_min - c_or) / c_dr) ((c_bb_max - c_or) / c_dr)
+                  t1 = max ((c_bb_min - c_or) / c_dr) ((c_bb_max - c_or) / c_dr)
+                  tmin = max t0 t_min
+                  tmax = min t1 t_max
+               in tmax > tmin
+         else False)
+    True
     [vecX, vecY, vecZ]
 
 type Time = Double
@@ -446,14 +449,17 @@ sphCenter :: Hittable -> Double -> Vec3
 sphCenter (Sphere c _ _) _ = c
 sphCenter (MovingSphere c0 c1 t0 t1 _ _) t =
   c0 `vecAdd` scale ((t - t0) / (t1 - t0)) (c1 `vecSub` c0)
+sphCenter x _ = error $ "sphCenter called on non-sphere " ++ show x
 
 sphRadius :: Hittable -> Double
 sphRadius (Sphere _ r _)             = r
 sphRadius (MovingSphere _ _ _ _ r _) = r
+sphRadius x = error $ "sphRadius called on non-sphere " ++ show x
 
 sphMaterial :: Hittable -> Material
 sphMaterial (Sphere _ _ m)             = m
 sphMaterial (MovingSphere _ _ _ _ _ m) = m
+sphMaterial x = error $ "sphMaterial called on non-sphere " ++ show x
 
 scatter :: Material -> Ray -> Hit -> RandomState s (Maybe (Ray, Albedo))
 scatter (Lambertian tex) rin (Hit _ hp hn hu hv _ _) = do
