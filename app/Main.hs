@@ -30,13 +30,15 @@ main = do
   putStrLn $ show imageWidth ++ " " ++ show imageHeight
   putStrLn "255"
   let gen = randGen 1024 -- Fix a seed for comparable performance tests
-  et <- earthTexture
-  let (world, g1) = makeRandomScene et 0.0 1.0 gen
+  --let (world, g1) = makeRandomScene et 0.0 1.0 gen
+  --et <- earthTexture
   --let (world, g1) = makeEarthScene et 0.0 1.0 gen
   --let (world, g1) = makeTwoPerlinSpheresScene 0.0 1.0 gen
+  let (world, g1) = makeSimpleLightScene 0.0 1.0 gen
   gs <- replicateM (defaultnThreads - 1) newRandGen
   let gens = g1 : gs
-  let camera = randomSceneCamera (imageWidth, imageHeight)
+  -- let camera = randomSceneCamera (imageWidth, imageHeight)
+  let camera = twoSpheresSceneCamera (imageWidth, imageHeight)
   let staticEnv =
         mkRenderStaticEnv
           world

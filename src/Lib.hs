@@ -5,6 +5,7 @@ module Lib
     ( earthTexture
     , makeEarthScene
     , makeRandomScene
+    , makeSimpleLightScene
     , makeTwoPerlinSpheresScene
     , makeTwoSpheresScene
     , mkRenderStaticEnv
@@ -895,6 +896,30 @@ parallelRenderRow rowps staticEnv gsRef = do
     (replicate (getStaticImageWidth staticEnv) (Albedo $ Vec3 (0.0, 0.0, 0.0)))
     sampleGroups
 
+
+-- Scenes
+
+makeSimpleLightScene :: Time -> Time -> RandGen -> (Scene, RandGen)
+makeSimpleLightScene t0 t1 gen =
+  runST $ do
+    gRef <- newSTRef gen
+    world <-
+      runReaderT
+        (do perText <- makePerlin 1.5
+            let difflight =
+                  DiffuseLight $ ConstantColor $ Albedo $ Vec3 (4, 4, 4)
+            makeBVH
+              t0
+              t1
+              (    Sphere (Vec3 (0, -1000, 0)) 1000 (Lambertian perText)
+               :<| Sphere (Vec3 (0, 2, 0)) 2 (Lambertian perText)
+               :<| Sphere (Vec3 (0, 7, 0)) 2 difflight
+               :<| XYRect 3 5 1 3 (-2) difflight
+               :<| Empty))
+        (dummyRenderEnv gRef)
+    g1 <- readSTRef gRef
+    return ((world, Albedo $ Vec3 (0, 0, 0)), g1)
+
 earthTexture :: IO Texture
 earthTexture = do
   earthImg <- JP.readImage "./earthmap.jpg"
@@ -921,13 +946,13 @@ makeEarthScene earthTex t0 t1 gen =
 twoSpheresSceneCamera :: (Int, Int) -> Camera
 twoSpheresSceneCamera (imageWidth, imageHeight) =
   newCamera
-    (Vec3 (13.0, 2.0, 3.0))
-    (Vec3 (0.0, 0.0, 0.0))
+    (Vec3 (26.0, 4.0, 6.0))
+    (Vec3 (0.0, 2.0, 0.0))
     (Vec3 (0.0, 1.0, 0.0))
     20.0
     (fromIntegral imageWidth / fromIntegral imageHeight)
     0.1
-    10.0
+    20.0
     0.0
     1.0
 
