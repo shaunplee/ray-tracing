@@ -49,8 +49,8 @@ epsilon = 0.0001
 infinity :: Double
 infinity = read "Infinity" :: Double
 
--- A scene should be a BVHNode, which is a Hittable
-type Scene = Hittable
+-- A scene should be a BVHNode, which is a Hittable, and backrgound color
+type Scene = (Hittable, Albedo)
 
 -- Use the ST monad to thread the random number generator
 type RandomState s = ReaderT (RenderEnv s) (ST s)
@@ -59,7 +59,13 @@ newtype RenderStaticEnv =
   RenderStaticEnv (Scene, Camera, (Int, Int), Int, Int, Int, Int)
 
 mkRenderStaticEnv ::
-     Scene -> Camera -> (Int, Int) -> Int -> Int -> Int -> RenderStaticEnv
+     Scene
+  -> Camera
+  -> (Int, Int)
+  -> Int
+  -> Int
+  -> Int
+  -> RenderStaticEnv
 mkRenderStaticEnv s c (width, height) numSamples maxDepth numThreads =
   RenderStaticEnv
     ( s
@@ -74,7 +80,8 @@ getStaticImageWidth :: RenderStaticEnv -> Int
 getStaticImageWidth (RenderStaticEnv (_, _, (width, _), _, _, _, _)) = width
 
 getStaticImageHeight :: RenderStaticEnv -> Int
-getStaticImageHeight (RenderStaticEnv (_, _, (_, height), _, _, _, _)) = height
+getStaticImageHeight (RenderStaticEnv (_, _, (_, height), _, _, _, _)) =
+  height
 
 newtype RandGen = RandGen MT.PureMT
 
@@ -110,17 +117,23 @@ dummyCamera =
 dummyRenderStaticEnv :: RenderStaticEnv
 dummyRenderStaticEnv =
   let world =
-        Sphere
-          (Vec3 (0, 0, 0))
-          1.0
-          (Lambertian $ ConstantColor $ Albedo $ Vec3 (0, 1.0, 1.0))
+        ( Sphere
+            (Vec3 (0, 0, 0))
+            1.0
+            (Lambertian $ ConstantColor $ Albedo $ Vec3 (0, 1.0, 1.0))
+        , Albedo $ Vec3 (0, 0, 0))
    in mkRenderStaticEnv world dummyCamera (0, 0) 0 0 0
 
 dummyRenderEnv :: STRef s RandGen -> RenderEnv s
 dummyRenderEnv = mkRenderEnv dummyRenderStaticEnv
 
-getScene :: RenderEnv s -> Scene
-getScene (RenderEnv (RenderStaticEnv (scn, _, _, _, _, _, _), _)) = scn
+getSceneHittables :: RenderEnv s -> Hittable
+getSceneHittables (RenderEnv (RenderStaticEnv ((scn, _), _, _, _, _, _, _), _)) =
+  scn
+
+getBackground :: RenderEnv s -> Albedo
+getBackground (RenderEnv (RenderStaticEnv ((_, bkgd), _, _, _, _, _, _), _)) =
+  bkgd
 
 getCamera :: RenderEnv s -> Camera
 getCamera (RenderEnv (RenderStaticEnv (_, cam, _, _, _, _, _), _)) = cam
@@ -272,6 +285,7 @@ data Material
   = Lambertian Texture
   | Metal Texture Fuzz
   | Dielectric RefractiveIdx
+  | DiffuseLight Texture
   deriving Show
 
 newtype Fuzz = Fuzz Double
@@ -490,7 +504,12 @@ scatter (Dielectric (RefractiveIdx ref_idx)) rin (Hit _ hp hn _ _ hff _) = do
             in Just (Ray hp reflected (ray_time rin), albedo)
       else let refracted = refract unitDirection hn etaiOverEtat
             in Just (Ray hp refracted (ray_time rin), albedo)
+scatter DiffuseLight {} _ _  = return Nothing
 scatter _ _ _ = error "scattering off unhittable object"
+
+emitted :: Material -> Double -> Double -> Vec3 -> Albedo
+emitted (DiffuseLight tex) u v p = textureValue tex u v p
+emitted _ _ _ _                  = Albedo $ Vec3 (0, 0, 0)
 
 reflect :: XYZ -> XYZ -> XYZ
 reflect v n = v `vecSub` scale (2.0 * dot v n) n
@@ -760,26 +779,22 @@ rayColor ray depth = rayColorHelp ray depth (Albedo $ Vec3 (1.0, 1.0, 1.0))
   where
     rayColorHelp :: Ray -> Int -> Albedo -> RayTracingM s Albedo
     rayColorHelp r d (Albedo alb_acc) = do
-      htbls <- asks getScene
+      htbls <- asks getSceneHittables
       if d <= 0
         then return $ Albedo $ Vec3 (0.0, 0.0, 0.0)
         else case hit htbls r 0.001 infinity of
                Just h -> do
                  mscatter <- scatter (hit_material h) r h
+                 let em@(Albedo emv) =
+                       emitted (hit_material h) (hit_u h) (hit_v h) (hit_p h)
                  case mscatter of
                    Just (sray, Albedo alb) ->
                      rayColorHelp
                        sray
                        (d - 1)
-                       (Albedo $ alb_acc `vecMul` alb)
-                   Nothing -> return $ Albedo $ Vec3 (0.0, 0.0, 0.0)
-               Nothing ->
-                 let unitDirection = makeUnitVector (ray_direction r)
-                     t = 0.5 * (vecY unitDirection + 1.0)
-                  in return $ Albedo $
-                     alb_acc `vecMul`
-                     (scale (1.0 - t) (Vec3 (1.0, 1.0, 1.0)) `vecAdd`
-                      scale t (Vec3 (0.5, 0.7, 1.0)))
+                       (Albedo $ emv `vecAdd` (alb_acc `vecMul` alb))
+                   Nothing -> return em
+               Nothing -> asks getBackground
 
 sampleColor :: (Int, Int) -> Albedo -> Int -> RayTracingM s Albedo
 sampleColor (x, y) (Albedo accCol) _ = do
@@ -878,7 +893,7 @@ makeEarthScene earthTex t0 t1 gen =
            (Sphere (Vec3 (0, 0, 0)) 2 (Lambertian earthTex) :<| Empty))
         (dummyRenderEnv gRef)
     g1 <- readSTRef gRef
-    return (world, g1)
+    return ((world, Albedo $ Vec3 (0, 0, 0)), g1)
 
 twoSpheresSceneCamera :: (Int, Int) -> Camera
 twoSpheresSceneCamera (imageWidth, imageHeight) =
@@ -908,7 +923,7 @@ makeTwoPerlinSpheresScene t0 t1 gen =
                Empty))
         (dummyRenderEnv gRef)
     g1 <- readSTRef gRef
-    return (world, g1)
+    return ((world, Albedo $ Vec3 (0, 0, 0)), g1)
 
 makeTwoSpheresScene :: Time -> Time -> RandGen -> (Scene, RandGen)
 makeTwoSpheresScene t0 t1 gen =
@@ -932,7 +947,7 @@ makeTwoSpheresScene t0 t1 gen =
             Empty))
         (dummyRenderEnv gRef)
     g1 <- readSTRef gRef
-    return (world, g1)
+    return ((world, Albedo $ Vec3 (0, 0, 0)), g1)
 
 randomSceneCamera :: (Int, Int) -> Camera
 randomSceneCamera (imageWidth, imageHeight) =
@@ -982,7 +997,8 @@ makeRandomScene earthtex _ _ gen =
               1.0
               (Metal (ConstantColor $ Albedo $ Vec3 (0.7, 0.6, 0.5)) (Fuzz 0.0))
       nps <- catMaybes <$> mapM makeRandomSphereM ns
-      makeBVH 0.0 1.0 $ ground :<| s1 :<| s2 :<| s3 :<| S.fromList nps
+      world <- makeBVH 0.0 1.0 $ ground :<| s1 :<| s2 :<| s3 :<| S.fromList nps
+      return (world, Albedo $ Vec3 (0, 0, 0))
     makeRandomSphereM :: (Int, Int) -> RandomState s (Maybe Hittable)
     makeRandomSphereM (a, b) = do
       mat <- randomDoubleM
