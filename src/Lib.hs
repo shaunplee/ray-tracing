@@ -429,10 +429,16 @@ data Hittable
                  , msphere_time1    :: Time
                  , msphere_radius   :: Double
                  , msphere_material :: Material }
-  | BVHNode {bvh_left   :: Hittable
+  | XYRect { xyrect_x0       :: Double
+           , xyrect_x1       :: Double
+           , xyrect_y0       :: Double
+           , xyrect_y1       :: Double
+           , xyrect_k        :: Double
+           , xyrect_material :: Material }
+  | BVHNode { bvh_left  :: Hittable
             , bvh_right :: Hittable
-            , bvh_box   :: Box}
-    deriving Show
+            , bvh_box   :: Box }
+  deriving (Show)
 
 data Box = Box
   { box_min :: Vec3
@@ -538,6 +544,8 @@ boundingBox (MovingSphere c0 c1 _ _ r _) _ _ =
       box0 = Box (c0 `vecSub` rad) (c0 `vecAdd` rad)
       box1 = Box (c1 `vecSub` rad) (c1 `vecAdd` rad)
    in surroundingBox box0 box1
+boundingBox (XYRect x0 x1 y0 y1 k _) _ _ =
+  Box (Vec3 (x0, y0, k - epsilon)) (Vec3 (x1, y1, k + epsilon))
 boundingBox (BVHNode _ _ box) _ _ = box
 
 surroundingBox :: Box -> Box -> Box
@@ -594,6 +602,21 @@ hit (BVHNode bvh_l bvh_r box) r t_min t_max =
                Nothing       -> Just hitLeft -- no, take hit from left branch
                Just hitRight -> Just hitRight -- yes, take hit from right branch
     else Nothing
+hit (XYRect x0 x1 y0 y1 k rmat) r@(Ray ror rdr _) t_min t_max
+  | (t < t_min) || (t > t_max) = Nothing
+  | otherwise =
+    let x = vecX ror + t * vecX rdr
+        y = vecY ror + t * vecY rdr
+     in if (x < x0) || (x > x1) || (y < y0) || (y > y1)
+          then Nothing
+          else let rec_u = (x - x0) / (x1 - x0)
+                   rec_v = (y - y0) / (y1 - y0)
+                   p = r `at` t
+                   outwardNormal = Vec3 (0, 0, 1)
+                   frontFace = dot rdr outwardNormal < 0.0
+                in Just $ Hit t p outwardNormal rec_u rec_v frontFace rmat
+  where
+    t = (k - vecZ ror) / vecZ rdr
 hit sphere r@(Ray ror rdr tm) t_min t_max =
   let sc = sphCenter sphere tm
       sr = sphRadius sphere
