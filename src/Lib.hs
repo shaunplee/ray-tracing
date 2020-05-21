@@ -87,7 +87,7 @@ getStaticImageHeight (RenderStaticEnv (_, _, (_, height), _, _, _, _)) =
 newtype RandGen = RandGen MT.PureMT
 
 newRandGen :: IO RandGen
-newRandGen = do RandGen <$> MT.newPureMT
+newRandGen = RandGen <$> MT.newPureMT
 
 randGen :: Word64 -> RandGen
 randGen s = RandGen (MT.pureMT s)
@@ -799,26 +799,29 @@ newCamera lookfrom lookat vup vfov aspect aperture focusDist t0 t1 =
    in Camera origin lowerLeftCorner horizontal vertical u v w lensRadius t0 t1
 
 rayColor :: Ray -> Int -> RayTracingM s Albedo
-rayColor ray depth = rayColorHelp ray depth (Albedo $ Vec3 (1.0, 1.0, 1.0))
+rayColor ray depth = rayColorHelp ray depth id
   where
-    rayColorHelp :: Ray -> Int -> Albedo -> RayTracingM s Albedo
-    rayColorHelp r d (Albedo alb_acc) = do
+    rayColorHelp :: Ray -> Int -> (Albedo -> Albedo) -> RayTracingM s Albedo
+    rayColorHelp r d alb_acc = do
       htbls <- asks getSceneHittables
       if d <= 0
-        then return $ Albedo $ Vec3 (0.0, 0.0, 0.0)
+        then return $ alb_acc (Albedo $ Vec3 (0.0, 0.0, 0.0))
         else case hit htbls r 0.001 infinity of
+               Nothing -> do
+                 bgd <- asks getBackground
+                 return $ alb_acc bgd
                Just h -> do
-                 mscatter <- scatter (hit_material h) r h
                  let em@(Albedo emv) =
                        emitted (hit_material h) (hit_u h) (hit_v h) (hit_p h)
+                 mscatter <- scatter (hit_material h) r h
                  case mscatter of
-                   Just (sray, Albedo alb) ->
+                   Nothing -> return $ alb_acc em
+                   Just (sray, Albedo att) ->
                      rayColorHelp
                        sray
                        (d - 1)
-                       (Albedo $ emv `vecAdd` (alb_acc `vecMul` alb))
-                   Nothing -> return em
-               Nothing -> asks getBackground
+                       (\(Albedo new) ->
+                          alb_acc $ Albedo $ emv `vecAdd` (att `vecMul` new))
 
 sampleColor :: (Int, Int) -> Albedo -> Int -> RayTracingM s Albedo
 sampleColor (x, y) (Albedo accCol) _ = do
@@ -905,20 +908,20 @@ makeSimpleLightScene t0 t1 gen =
     gRef <- newSTRef gen
     world <-
       runReaderT
-        (do perText <- makePerlin 1.5
+        (do perText <- makePerlin 1.0
             let difflight =
                   DiffuseLight $ ConstantColor $ Albedo $ Vec3 (4, 4, 4)
             makeBVH
               t0
               t1
               (    Sphere (Vec3 (0, -1000, 0)) 1000 (Lambertian perText)
-               :<| Sphere (Vec3 (0, 2, 0)) 2 (Lambertian perText)
+               :<| Sphere (Vec3 (0, 2, 0)) 2 (Lambertian (ConstantColor $ Albedo $ Vec3 (0.5, 0.0, 0.3)))
                :<| Sphere (Vec3 (0, 7, 0)) 2 difflight
                :<| XYRect 3 5 1 3 (-2) difflight
                :<| Empty))
         (dummyRenderEnv gRef)
     g1 <- readSTRef gRef
-    return ((world, Albedo $ Vec3 (0, 0, 0)), g1)
+    return ((world, Albedo $ Vec3 (0.0, 0.0, 0.0)), g1)
 
 earthTexture :: IO Texture
 earthTexture = do
