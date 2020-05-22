@@ -85,6 +85,7 @@ getStaticImageHeight (RenderStaticEnv (_, _, (_, height), _, _, _, _)) =
   height
 
 newtype RandGen = RandGen MT.PureMT
+  deriving Show
 
 newRandGen :: IO RandGen
 newRandGen = RandGen <$> MT.newPureMT
@@ -195,8 +196,8 @@ vecMul :: Vec3 -> Vec3 -> Vec3
 vecMul (Vec3 (x1, y1, z1)) (Vec3 (x2, y2, z2)) =
   Vec3 (x1 * x2, y1 * y2, z1 * z2)
 
-vecDiv :: Vec3 -> Vec3 -> Vec3
-vecDiv (Vec3 (x1, y1, z1)) (Vec3 (x2, y2, z2)) =
+_vecDiv :: Vec3 -> Vec3 -> Vec3
+_vecDiv (Vec3 (x1, y1, z1)) (Vec3 (x2, y2, z2)) =
   Vec3 (x1 / x2, y1 / y2, z1 / z2)
 
 vecAdd :: Vec3 -> Vec3 -> Vec3
@@ -271,15 +272,15 @@ at :: Ray -> Double -> XYZ
 at (Ray orn dr _) t = orn `vecAdd` scale t dr
 
 data Hit
-  = Hit { hit_t         :: Double
-        , hit_p         :: XYZ
-        , hit_normal    :: XYZ -- vector normal to the surface of the object
+  = Hit { _hit_t         :: Double
+        , hit_p          :: XYZ
+        , _hit_normal    :: XYZ -- | vector normal to the surface of the object
                          -- at the point of the hit
-        , hit_u         :: Double
-        , hit_v         :: Double
-        , hit_frontFace :: Bool -- did the ray hit the outer face of the
-                          -- object?
-        , hit_material  :: Material }
+        , hit_u          :: Double
+        , hit_v          :: Double
+        , _hit_frontFace :: Bool -- | did the ray hit the outer face of the
+                           -- object?
+        , hit_material   :: Material }
   | EmptyHit
 
 data Material
@@ -655,12 +656,17 @@ recHit temp r@(Ray _ dr tm) sphere =
         in (1.0 - ((phi + pi) / (2 * pi)), (theta + (pi / 2)) / pi)
    in Hit temp p n u v frontFace sm
 
+randomDouble :: RandGen -> (Double, RandGen)
+randomDouble (RandGen g) =
+  let (x, g1) = MT.randomDouble g
+   in (x, RandGen g1)
+
 randomDoubleM :: RandomState s Double
 randomDoubleM = do
   gRef <- asks getGenRef
-  (RandGen g1) <- lift $ readSTRef gRef
-  let (x, g2) = MT.randomDouble g1
-  lift $ writeSTRef gRef (RandGen g2)
+  g1 <- lift $ readSTRef gRef
+  let (x, g2) = randomDouble g1
+  lift $ writeSTRef gRef g2
   return x
 
 randomDoubleRM :: Double -> Double -> RandomState s Double
@@ -674,11 +680,11 @@ randomIntRM lo hi = floor <$> randomDoubleRM (fromIntegral lo) (fromIntegral hi)
 randomVec3DoubleM :: RandomState s Vec3
 randomVec3DoubleM = do
   gRef <- asks getGenRef
-  (RandGen gen) <- lift $ readSTRef gRef
-  let (x, g1) = MT.randomDouble gen
-  let (y, g2) = MT.randomDouble g1
-  let (z, g3) = MT.randomDouble g2
-  lift $ writeSTRef gRef (RandGen g3)
+  gen <- lift $ readSTRef gRef
+  let (x, g1) = randomDouble gen
+  let (y, g2) = randomDouble g1
+  let (z, g3) = randomDouble g2
+  lift $ writeSTRef gRef g3
   return $ Vec3 (x, y, z)
 
 randomVec3DoubleRM :: Double -> Double -> RandomState s Vec3
@@ -688,23 +694,23 @@ randomVec3DoubleRM mn mx = do
   z <- randomDoubleRM mn mx
   return $ Vec3 (x, y, z)
 
-randomInUnitSphereM :: RandomState s Vec3
-randomInUnitSphereM = do
+_randomInUnitSphereM :: RandomState s Vec3
+_randomInUnitSphereM = do
   gRef <- asks getGenRef
   gen <- lift $ readSTRef gRef
-  let (rUnit, gen1) = randomInUnitSphere gen
+  let (rUnit, gen1) = _randomInUnitSphere gen
   lift $ writeSTRef gRef gen1
   return rUnit
 
-randomInUnitSphere :: RandGen -> (Vec3, RandGen)
-randomInUnitSphere (RandGen gen) =
-  let (x, g1) = MT.randomDouble gen
-      (y, g2) = MT.randomDouble g1
-      (z, g3) = MT.randomDouble g2
+_randomInUnitSphere :: RandGen -> (Vec3, RandGen)
+_randomInUnitSphere gen =
+  let (x, g1) = randomDouble gen
+      (y, g2) = randomDouble g1
+      (z, g3) = randomDouble g2
       p = scale 2.0 (Vec3 (x, y, z)) `vecSub` Vec3 (1.0, 1.0, 1.0)
    in if squaredLength p < 1.0
-        then (p, RandGen g3)
-        else randomInUnitSphere (RandGen g3)
+        then (p, g3)
+        else _randomInUnitSphere g3
 
 randomInUnitDiskM :: RandomState s Vec3
 randomInUnitDiskM = do
@@ -715,29 +721,29 @@ randomInUnitDiskM = do
   return rUnit
 
 randomInUnitDisk :: RandGen -> (Vec3, RandGen)
-randomInUnitDisk (RandGen gen) =
-  let (x, g1) = MT.randomDouble gen
-      (y, g2) = MT.randomDouble g1
+randomInUnitDisk gen =
+  let (x, g1) = randomDouble gen
+      (y, g2) = randomDouble g1
       p = scale 2.0 (Vec3 (x, y, 0)) `vecSub` Vec3 (1.0, 1.0, 0)
    in if squaredLength p < 1.0
-        then (p, RandGen g2)
-        else randomInUnitDisk $ RandGen g2
+        then (p, g2)
+        else randomInUnitDisk g2
 
 randomUnitVectorM :: RandomState s Vec3
 randomUnitVectorM = do
   gRef <- asks getGenRef
-  (RandGen gen) <- lift $ readSTRef gRef
-  let (aa, g1) = MT.randomDouble gen
+  gen <- lift $ readSTRef gRef
+  let (aa, g1) = randomDouble gen
   let a = aa * 2 * pi
-  let (zz, g2) = MT.randomDouble g1
+  let (zz, g2) = randomDouble g1
   let z = (zz * 2) - 1
   let r = sqrt (1 - z * z)
-  lift $ writeSTRef gRef $ RandGen g2
+  lift $ writeSTRef gRef g2
   return $ Vec3 (r * cos a, r * sin a, z)
 
-randomInHemisphereM :: XYZ -> RandomState s Vec3
-randomInHemisphereM n = do
-  inUnitSphere <- randomInUnitSphereM
+_randomInHemisphereM :: XYZ -> RandomState s Vec3
+_randomInHemisphereM n = do
+  inUnitSphere <- _randomInUnitSphereM
   if (inUnitSphere `dot` n) > 0.0
     then return inUnitSphere
     else return (vecNegate inUnitSphere)
@@ -749,7 +755,7 @@ data Camera = Camera
   , camera_vert       :: XYZ
   , camera_u          :: XYZ
   , camera_v          :: XYZ
-  , camera_w          :: XYZ
+  , _camera_w         :: XYZ
   , camera_lensRadius :: Double
   , camera_t0         :: Double
   , camera_t1         :: Double
@@ -826,17 +832,17 @@ rayColor ray depth = rayColorHelp ray depth id
 sampleColor :: (Int, Int) -> Albedo -> Int -> RayTracingM s Albedo
 sampleColor (x, y) (Albedo accCol) _ = do
   gRef <- asks getGenRef
-  (RandGen gen) <- lift $ readSTRef gRef
+  gen <- lift $ readSTRef gRef
   maxDepth <- asks getMaxDepth
-  let (ru, g1) = MT.randomDouble gen
-  let (rv, g2) = MT.randomDouble g1
+  let (ru, g1) = randomDouble gen
+  let (rv, g2) = randomDouble g1
   imageWidth <- asks getImageWidth
   imageHeight <- asks getImageHeight
   let u = (fromIntegral x + ru) / fromIntegral imageWidth
   let v = (fromIntegral y + rv) / fromIntegral imageHeight
   camera <- asks getCamera
   r <- getRay camera u v
-  lift $ writeSTRef gRef $ RandGen g2
+  lift $ writeSTRef gRef g2
   (Albedo c1) <- rayColor r maxDepth
   return $ Albedo $ accCol `vecAdd` c1
 

@@ -49,7 +49,7 @@ packages:
 
 ghc-options:
   "$everything": -O2
-  "$targets": -Wall -fexcess-precision -optc-ffast-math -threaded -rtsopts
+  "$targets": -Wall -fexcess-precision -optc-ffast-math -threaded
 
 # Control whether we use the GHC we find on the path
 # system-ghc: true
