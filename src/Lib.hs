@@ -922,7 +922,8 @@ makeSimpleLightScene t0 t1 gen =
               t0
               t1
               (    Sphere (Vec3 (0, -1000, 0)) 1000 (Lambertian perText)
-               :<| Sphere (Vec3 (0, 2, 0)) 2 (Lambertian (ConstantColor $ Albedo $ Vec3 (0.5, 0.0, 0.3)))
+--               :<| Sphere (Vec3 (0, 2, 0)) 2 (Lambertian (ConstantColor $ Albedo $ Vec3 (0.5, 0.0, 0.3)))
+               :<| Sphere (Vec3 (0, 2, 0)) 2 (Lambertian perText)
                :<| Sphere (Vec3 (0, 7, 0)) 2 difflight
                :<| XYRect 3 5 1 3 (-2) difflight
                :<| Empty))
