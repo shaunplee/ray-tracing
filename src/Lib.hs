@@ -808,26 +808,27 @@ rayColor :: Ray -> Int -> RayTracingM s Albedo
 rayColor ray depth = rayColorHelp ray depth id
   where
     rayColorHelp :: Ray -> Int -> (Albedo -> Albedo) -> RayTracingM s Albedo
-    rayColorHelp r d alb_acc = do
-      htbls <- asks getSceneHittables
+    rayColorHelp r d alb_acc =
       if d <= 0
         then return $ alb_acc (Albedo $ Vec3 (0.0, 0.0, 0.0))
-        else case hit htbls r 0.001 infinity of
-               Nothing -> do
-                 bgd <- asks getBackground
-                 return $ alb_acc bgd
-               Just h -> do
-                 let em@(Albedo emv) =
-                       emitted (hit_material h) (hit_u h) (hit_v h) (hit_p h)
-                 mscatter <- scatter (hit_material h) r h
-                 case mscatter of
-                   Nothing -> return $ alb_acc em
-                   Just (sray, Albedo att) ->
-                     rayColorHelp
-                       sray
-                       (d - 1)
-                       (\(Albedo new) ->
-                          alb_acc $ Albedo $ emv `vecAdd` (att `vecMul` new))
+        else do
+          htbls <- asks getSceneHittables
+          case hit htbls r 0.001 infinity of
+            Nothing -> do
+              bgd <- asks getBackground
+              return $ alb_acc bgd
+            Just h -> do
+              let em@(Albedo emv) =
+                    emitted (hit_material h) (hit_u h) (hit_v h) (hit_p h)
+              mscatter <- scatter (hit_material h) r h
+              case mscatter of
+                Nothing -> return $ alb_acc em
+                Just (sray, Albedo att) ->
+                  rayColorHelp
+                    sray
+                    (d - 1)
+                    (\(Albedo new) ->
+                       alb_acc $ Albedo $ emv `vecAdd` (att `vecMul` new))
 
 sampleColor :: (Int, Int) -> Albedo -> Int -> RayTracingM s Albedo
 sampleColor (x, y) (Albedo accCol) _ = do
@@ -1055,7 +1056,7 @@ makeRandomScene earthtex _ _ gen =
               (Metal (ConstantColor $ Albedo $ Vec3 (0.7, 0.6, 0.5)) (Fuzz 0.0))
       nps <- catMaybes <$> mapM makeRandomSphereM ns
       world <- makeBVH 0.0 1.0 $ ground :<| s1 :<| s2 :<| s3 :<| S.fromList nps
-      return (world, Albedo $ Vec3 (0, 0, 0))
+      return (world, Albedo $ Vec3 (0.7, 0.8, 0.9))
     makeRandomSphereM :: (Int, Int) -> RandomState s (Maybe Hittable)
     makeRandomSphereM (a, b) = do
       mat <- randomDoubleM
