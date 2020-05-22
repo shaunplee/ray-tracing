@@ -431,16 +431,32 @@ data Hittable
                  , msphere_time1    :: Time
                  , msphere_radius   :: Double
                  , msphere_material :: Material }
-  | XYRect { xyrect_x0       :: Double
-           , xyrect_x1       :: Double
-           , xyrect_y0       :: Double
-           , xyrect_y1       :: Double
-           , xyrect_k        :: Double
-           , xyrect_material :: Material }
+  | Rect Rectangle
   | BVHNode { bvh_left  :: Hittable
             , bvh_right :: Hittable
             , bvh_box   :: Box }
-  deriving (Show)
+  deriving Show
+
+data Rectangle
+  = XYRect { _xyrect_x0       :: Double
+           , _xyrect_x1       :: Double
+           , _xyrect_y0       :: Double
+           , _xyrect_y1       :: Double
+           , _xyrect_k        :: Double
+           , _xyrect_material :: Material }
+  | XZRect { _xzrect_x0       :: Double
+           , _xzrect_x1       :: Double
+           , _xzrect_z0       :: Double
+           , _xzrect_z1       :: Double
+           , _xzrect_k        :: Double
+           , _xzrect_material :: Material }
+  | YZRect { _yzrect_y0       :: Double
+           , _yzrect_y1       :: Double
+           , _yzrect_z0       :: Double
+           , _yzrect_z1       :: Double
+           , _yzrect_k        :: Double
+           , _yzrect_material :: Material }
+    deriving Show
 
 data Box = Box
   { box_min :: Vec3
@@ -448,22 +464,19 @@ data Box = Box
   } deriving (Show)
 
 boxRayIntersect :: Box -> Ray -> Double -> Double -> Bool
-boxRayIntersect (Box bb_min bb_max) (Ray ror rdr _) t_min t_max =
-  foldr
-    (\cur_axis acc ->
-       if acc
-         then let c_or = cur_axis ror
-                  c_dr = cur_axis rdr
-                  c_bb_min = cur_axis bb_min
-                  c_bb_max = cur_axis bb_max
-                  t0 = min ((c_bb_min - c_or) / c_dr) ((c_bb_max - c_or) / c_dr)
-                  t1 = max ((c_bb_min - c_or) / c_dr) ((c_bb_max - c_or) / c_dr)
-                  tmin = max t0 t_min
-                  tmax = min t1 t_max
-               in tmax > tmin
-         else False)
-    True
-    [vecX, vecY, vecZ]
+boxRayIntersect (Box bb_min bb_max) (Ray ror rdr _) t_min t_max = all
+  (\cur_axis ->
+    let c_or     = cur_axis ror
+        c_dr     = cur_axis rdr
+        c_bb_min = cur_axis bb_min
+        c_bb_max = cur_axis bb_max
+        t0       = min ((c_bb_min - c_or) / c_dr) ((c_bb_max - c_or) / c_dr)
+        t1       = max ((c_bb_min - c_or) / c_dr) ((c_bb_max - c_or) / c_dr)
+        tmin     = max t0 t_min
+        tmax     = min t1 t_max
+    in  tmax > tmin
+  )
+  [vecX, vecY, vecZ]
 
 type Time = Double
 
@@ -546,8 +559,12 @@ boundingBox (MovingSphere c0 c1 _ _ r _) _ _ =
       box0 = Box (c0 `vecSub` rad) (c0 `vecAdd` rad)
       box1 = Box (c1 `vecSub` rad) (c1 `vecAdd` rad)
    in surroundingBox box0 box1
-boundingBox (XYRect x0 x1 y0 y1 k _) _ _ =
+boundingBox (Rect (XYRect x0 x1 y0 y1 k _)) _ _ =
   Box (Vec3 (x0, y0, k - epsilon)) (Vec3 (x1, y1, k + epsilon))
+boundingBox (Rect (XZRect x0 x1 z0 z1 k _)) _ _ =
+  Box (Vec3 (x0, k - epsilon, z0)) (Vec3 (x1, k + epsilon, z1))
+boundingBox (Rect (YZRect y0 y1 z0 z1 k _)) _ _ =
+  Box (Vec3 (k - epsilon, y0, z0)) (Vec3 (k + epsilon, y1, z1))
 boundingBox (BVHNode _ _ box) _ _ = box
 
 surroundingBox :: Box -> Box -> Box
@@ -604,21 +621,30 @@ hit (BVHNode bvh_l bvh_r box) r t_min t_max =
                Nothing       -> Just hitLeft -- no, take hit from left branch
                Just hitRight -> Just hitRight -- yes, take hit from right branch
     else Nothing
-hit (XYRect x0 x1 y0 y1 k rmat) r@(Ray ror rdr _) t_min t_max
-  | (t < t_min) || (t > t_max) = Nothing
-  | otherwise =
-    let x = vecX ror + t * vecX rdr
-        y = vecY ror + t * vecY rdr
-     in if (x < x0) || (x > x1) || (y < y0) || (y > y1)
-          then Nothing
-          else let rec_u = (x - x0) / (x1 - x0)
-                   rec_v = (y - y0) / (y1 - y0)
-                   p = r `at` t
-                   outwardNormal = Vec3 (0, 0, 1)
-                   frontFace = dot rdr outwardNormal < 0.0
-                in Just $ Hit t p outwardNormal rec_u rec_v frontFace rmat
+hit (Rect rect) r@(Ray ror rdr _) t_min t_max =
+  case rect of
+    (XYRect x0 x1 y0 y1 k rmat) ->
+      rectHit x0 x1 y0 y1 vecX vecY (Vec3 (0, 0, 1)) k rmat
+    (XZRect x0 x1 z0 z1 k rmat) ->
+      rectHit x0 x1 z0 z1 vecX vecZ (Vec3 (0, 1, 0)) k rmat
+    (YZRect y0 y1 z0 z1 k rmat) ->
+      rectHit y0 y1 z0 z1 vecY vecZ (Vec3 (1, 0, 0)) k rmat
   where
-    t = (k - vecZ ror) / vecZ rdr
+    rectHit i0 i1 j0 j1 vecI vecJ outwardNormal k mat =
+      if (t < t_min) || (t > t_max)
+        then Nothing
+        else let i = vecI ror + t * vecI rdr
+                 j = vecJ ror + t * vecJ rdr
+              in if (i < i0) || (i > i1) || (j < j0) || (j > j1)
+                   then Nothing
+                   else let rec_u = (i - i0) / (i1 - i0)
+                            rec_v = (j - j0) / (j1 - j0)
+                            p = r `at` t
+                            frontFace = dot rdr outwardNormal < 0.0
+                         in Just $
+                            Hit t p outwardNormal rec_u rec_v frontFace mat
+      where
+        t = (k - vecZ ror) / vecZ rdr
 hit sphere r@(Ray ror rdr tm) t_min t_max =
   let sc = sphCenter sphere tm
       sr = sphRadius sphere
@@ -925,7 +951,7 @@ makeSimpleLightScene t0 t1 gen =
 --               :<| Sphere (Vec3 (0, 2, 0)) 2 (Lambertian (ConstantColor $ Albedo $ Vec3 (0.5, 0.0, 0.3)))
                :<| Sphere (Vec3 (0, 2, 0)) 2 (Lambertian perText)
                :<| Sphere (Vec3 (0, 7, 0)) 2 difflight
-               :<| XYRect 3 5 1 3 (-2) difflight
+               :<| Rect (XYRect 3 5 1 3 (-2) difflight)
                :<| Empty))
         (dummyRenderEnv gRef)
     g1 <- readSTRef gRef
