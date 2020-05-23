@@ -847,7 +847,7 @@ rayColor ray depth = rayColorHelp ray depth id
         then return $ alb_acc (albedo (0.0, 0.0, 0.0))
         else do
           htbls <- asks getSceneHittables
-          case hit htbls r 0.001 infinity of
+          case hit htbls r epsilon infinity of
             Nothing -> do
               bgd <- asks getBackground
               return $ alb_acc bgd
