@@ -436,6 +436,9 @@ data Hittable
                  Double   -- | msphere_radius
                  Material -- | msphere_material
   | Rect Rectangle
+  | Cuboid Vec3 -- | box min
+           Vec3 -- | box max
+           [Rectangle] -- | Rects of the six sides of the box
   | BVHNode Hittable -- | bvh_left
             Hittable -- | bvh_right
             Box      -- | bvh_box
@@ -446,6 +449,18 @@ sphere = Sphere
 
 movingSphere :: Vec3 -> Vec3 -> Time -> Time -> Double -> Material -> Hittable
 movingSphere = MovingSphere
+
+cuboid :: Vec3 -> Vec3 -> Material -> Hittable
+cuboid bmin@(Vec3 (x0, y0, z0)) bmax@(Vec3 (x1, y1, z1)) mat = Cuboid
+  bmin
+  bmax
+  [ XYRect x0 x1 y0 y1 z1 mat
+  , XYRect x0 x1 y0 y1 z0 mat
+  , XZRect x0 x1 z0 z1 y1 mat
+  , XZRect x0 x1 z0 z1 y0 mat
+  , YZRect y0 y1 z0 z1 x1 mat
+  , YZRect y0 y1 z0 z1 x0 mat
+  ]
 
 data Rectangle
   = XYRect Double   -- | xyrect_x0
@@ -586,6 +601,7 @@ boundingBox (Rect (XZRect x0 x1 z0 z1 k _)) _ _ =
 boundingBox (Rect (YZRect y0 y1 z0 z1 k _)) _ _ =
   Box (Vec3 (k - epsilon, y0, z0)) (Vec3 (k + epsilon, y1, z1))
 boundingBox (BVHNode _ _ box) _ _ = box
+boundingBox (Cuboid c_min c_max _) _ _ = Box c_min c_max
 
 surroundingBox :: Box -> Box -> Box
 surroundingBox (Box b0min b0max) (Box b1min b1max) =
@@ -640,6 +656,15 @@ hit (BVHNode bvh_l bvh_r box) r t_min t_max =
                Nothing       -> Just hitLeft -- no, take hit from left branch
                Just hitRight -> Just hitRight -- yes, take hit from right branch
     else Nothing
+hit (Cuboid _ _ rl) r t_min t_max =
+  foldr1 closerHit (map (\h -> hit (Rect h) r t_min t_max) rl)
+  where
+    closerHit :: Maybe Hit -> Maybe Hit -> Maybe Hit
+    closerHit Nothing Nothing = Nothing
+    closerHit (Just h1) Nothing = Just h1
+    closerHit Nothing (Just h2) = Just h2
+    closerHit h1@(Just (Hit t1 _ _ _ _ _ _)) h2@(Just (Hit t2 _ _ _ _ _ _)) =
+      if t1 < t2 then h1 else h2
 hit (Rect rect) r@(Ray ror rdr _) t_min t_max =
   case rect of
     (XYRect x0 x1 y0 y1 k rmat) ->
@@ -976,6 +1001,8 @@ makeCornellBoxScene t0 t1 gen = runST $ do
         :<| xzRect 0 555 0 555 0 white
         :<| xzRect 0 555 0 555 555 white
         :<| xyRect 0 555 0 555 555 white
+        :<| cuboid (Vec3 (130, 0, 65)) (Vec3 (295, 165, 230)) white
+        :<| cuboid (Vec3 (265, 0, 295)) (Vec3 (430, 330, 460)) white
         :<| Empty
         )
     )
