@@ -2,7 +2,9 @@
 {-# LANGUAGE TupleSections #-}
 
 module Lib
-    ( earthTexture
+    ( cornellCamera
+    , earthTexture
+    , makeCornellBoxScene
     , makeEarthScene
     , makeRandomScene
     , makeSimpleLightScene
@@ -40,7 +42,8 @@ import           Data.Vector.Unboxed           (Vector, enumFromN, freeze, thaw)
 import qualified Data.Vector.Unboxed           as V ((!))
 import qualified Data.Vector.Unboxed.Mutable   as MV (swap)
 import           Data.Word                     (Word64, Word8)
-import           System.IO                     (hPutStr, stderr)
+import           System.IO                     (Handle, hPutStr, hPutStrLn,
+                                                stderr)
 import qualified System.Random.Mersenne.Pure64 as MT
 
 -- Epsilon (some smallish number)
@@ -122,8 +125,8 @@ dummyRenderStaticEnv =
         ( Sphere
             (Vec3 (0, 0, 0))
             1.0
-            (Lambertian $ ConstantColor $ Albedo $ Vec3 (0, 1.0, 1.0))
-        , Albedo $ Vec3 (0, 0, 0))
+            (Lambertian $ ConstantColor $ albedo (0, 1.0, 1.0))
+        , albedo (0, 0, 0))
    in mkRenderStaticEnv world dummyCamera (0, 0) 0 0 0
 
 dummyRenderEnv :: STRef s RandGen -> RenderEnv s
@@ -254,10 +257,10 @@ colorToAlbedo (RGB (r, g, b)) =
     (Vec3
        (fromIntegral r / 255.0, fromIntegral g / 255.0, fromIntegral b / 255.0))
 
-printRow :: Int -> (Int, [RGB]) -> IO ()
-printRow imageHeight (i, row) = do
+printRow :: Handle -> Int -> (Int, [RGB]) -> IO ()
+printRow handle imageHeight (i, row) = do
   hPutStr stderr ("\rRendering row " ++ show i ++ " of " ++ show imageHeight)
-  putStrLn $ showRow row
+  hPutStrLn handle $ showRow row
 
 showRow :: [RGB] -> String
 showRow row = unwords $ fmap show row
@@ -281,7 +284,6 @@ data Hit
         , _hit_frontFace :: Bool -- | did the ray hit the outer face of the
                            -- object?
         , hit_material   :: Material }
-  | EmptyHit
 
 data Material
   = Lambertian Texture
@@ -298,6 +300,9 @@ newtype RefractiveIdx = RefractiveIdx Double
 
 newtype Albedo = Albedo Vec3
   deriving Show
+
+albedo :: (Double, Double, Double) -> Albedo
+albedo rgb = Albedo $ Vec3 rgb
 
 instance NFData Albedo where
   rnf (Albedo v) = rnf v `seq` ()
@@ -370,7 +375,7 @@ noise (Perlin ranvec permX permY permZ sc) p =
   in perlinInterp c u v w
 noise (ConstantColor _) _ = undefined
 noise (CheckerTexture _ _) _ = undefined
-noise (ImageTexture {}) _ = undefined
+noise ImageTexture {} _ = undefined
 
 perlinInterp ::
      [((Double, Double, Double), Vec3)]
@@ -416,7 +421,7 @@ textureValue (ImageTexture (Just im) nx ny) u v _ =
       nyd = fromIntegral ny
       j = floor $ clamp (0, nyd - epsilon) ((1.0 - v) * nyd - epsilon)
    in colorToAlbedo $ pixelAt im i j
-textureValue (ImageTexture Nothing _ _) _ _ _ = Albedo $ Vec3 (0, 1, 1)
+textureValue (ImageTexture Nothing _ _) _ _ _ = albedo (0, 1, 1)
 
 marbleTexture :: Texture -> Vec3 -> Double
 marbleTexture ptex p = 0.5 * (1.0 + sin (vecZ p + 10 * turb ptex p 7))
@@ -510,7 +515,7 @@ scatter (Metal tex (Fuzz fuzz)) rin (Hit _ hp hn hu hv _ _) = do
            then Just (scattered, textureValue tex hu hv hp)
            else Nothing
 scatter (Dielectric (RefractiveIdx ref_idx)) rin (Hit _ hp hn _ _ hff _) = do
-  let albedo = Albedo $ Vec3 (1.0, 1.0, 1.0)
+  let alb = albedo (1.0, 1.0, 1.0)
   let etaiOverEtat =
         if hff
           then 1.0 / ref_idx
@@ -522,15 +527,14 @@ scatter (Dielectric (RefractiveIdx ref_idx)) rin (Hit _ hp hn _ _ hff _) = do
   return $
     if (etaiOverEtat * sinTheta > 1.0) || rd < schlick cosTheta etaiOverEtat
       then let reflected = reflect unitDirection hn
-            in Just (Ray hp reflected (ray_time rin), albedo)
+            in Just (Ray hp reflected (ray_time rin), alb)
       else let refracted = refract unitDirection hn etaiOverEtat
-            in Just (Ray hp refracted (ray_time rin), albedo)
+            in Just (Ray hp refracted (ray_time rin), alb)
 scatter DiffuseLight {} _ _  = return Nothing
-scatter _ _ _ = error "scattering off unhittable object"
 
 emitted :: Material -> Double -> Double -> Vec3 -> Albedo
 emitted (DiffuseLight tex) u v p = textureValue tex u v p
-emitted _ _ _ _                  = Albedo $ Vec3 (0, 0, 0)
+emitted _ _ _ _                  = albedo (0, 0, 0)
 
 reflect :: XYZ -> XYZ -> XYZ
 reflect v n = v `vecSub` scale (2.0 * dot v n) n
@@ -613,7 +617,6 @@ hit (BVHNode bvh_l bvh_r box) r t_min t_max =
     then case hit bvh_l r t_min t_max -- try to hit left branch
                of
            Nothing -> hit bvh_r r t_min t_max -- no hits, try right branch
-           Just EmptyHit -> error "Should not hit an Aabb"
            Just hitLeft@(Hit t _ _ _ _ _ _) -- left branch hit
             ->
              case hit bvh_r r t_min t -- is there a closer right branch hit?
@@ -624,13 +627,13 @@ hit (BVHNode bvh_l bvh_r box) r t_min t_max =
 hit (Rect rect) r@(Ray ror rdr _) t_min t_max =
   case rect of
     (XYRect x0 x1 y0 y1 k rmat) ->
-      rectHit x0 x1 y0 y1 vecX vecY (Vec3 (0, 0, 1)) k rmat
+      rectHit x0 x1 y0 y1 vecX vecY vecZ (Vec3 (0, 0, 1)) k rmat
     (XZRect x0 x1 z0 z1 k rmat) ->
-      rectHit x0 x1 z0 z1 vecX vecZ (Vec3 (0, 1, 0)) k rmat
+      rectHit x0 x1 z0 z1 vecX vecZ vecY (Vec3 (0, 1, 0)) k rmat
     (YZRect y0 y1 z0 z1 k rmat) ->
-      rectHit y0 y1 z0 z1 vecY vecZ (Vec3 (1, 0, 0)) k rmat
+      rectHit y0 y1 z0 z1 vecY vecZ vecX (Vec3 (1, 0, 0)) k rmat
   where
-    rectHit i0 i1 j0 j1 vecI vecJ outwardNormal k mat =
+    rectHit i0 i1 j0 j1 vecI vecJ vecK outwardNormal k mat =
       if (t < t_min) || (t > t_max)
         then Nothing
         else let i = vecI ror + t * vecI rdr
@@ -641,10 +644,14 @@ hit (Rect rect) r@(Ray ror rdr _) t_min t_max =
                             rec_v = (j - j0) / (j1 - j0)
                             p = r `at` t
                             frontFace = dot rdr outwardNormal < 0.0
+                            normal =
+                              if frontFace
+                                then outwardNormal
+                                else vecNegate outwardNormal
                          in Just $
-                            Hit t p outwardNormal rec_u rec_v frontFace mat
+                            Hit t p normal rec_u rec_v frontFace mat
       where
-        t = (k - vecZ ror) / vecZ rdr
+        t = (k - vecK ror) / vecK rdr
 hit sphere r@(Ray ror rdr tm) t_min t_max =
   let sc = sphCenter sphere tm
       sr = sphRadius sphere
@@ -673,14 +680,14 @@ recHit temp r@(Ray _ dr tm) sphere =
       pShift = p `vecSub` sc
       outwardNormal = divide pShift sr
       frontFace = dot dr outwardNormal < 0.0
-      n =
+      normal =
         if frontFace
           then outwardNormal
           else vecNegate outwardNormal
       (u, v) = let phi = atan2 (vecZ outwardNormal) (vecX outwardNormal)
                    theta = asin (vecY outwardNormal)
         in (1.0 - ((phi + pi) / (2 * pi)), (theta + (pi / 2)) / pi)
-   in Hit temp p n u v frontFace sm
+   in Hit temp p normal u v frontFace sm
 
 randomDouble :: RandGen -> (Double, RandGen)
 randomDouble (RandGen g) =
@@ -836,7 +843,7 @@ rayColor ray depth = rayColorHelp ray depth id
     rayColorHelp :: Ray -> Int -> (Albedo -> Albedo) -> RayTracingM s Albedo
     rayColorHelp r d alb_acc =
       if d <= 0
-        then return $ alb_acc (Albedo $ Vec3 (0.0, 0.0, 0.0))
+        then return $ alb_acc (albedo (0.0, 0.0, 0.0))
         else do
           htbls <- asks getSceneHittables
           case hit htbls r 0.001 infinity of
@@ -880,7 +887,7 @@ renderPos (x, y) = do
   (Albedo summedColor) <-
     foldM
       (sampleColor (x, y))
-      (Albedo $ Vec3 (0.0, 0.0, 0.0))
+      (albedo (0.0, 0.0, 0.0))
       [0 .. nsPerThread - 1]
   return $ Albedo $ divide summedColor (fromIntegral ns)
 
@@ -929,11 +936,49 @@ parallelRenderRow rowps staticEnv gsRef = do
   writeSTRef gsRef newGs
   return $ foldl'
     (zipWith (\(Albedo a1) (Albedo a2) -> Albedo $ vecAdd a1 a2))
-    (replicate (getStaticImageWidth staticEnv) (Albedo $ Vec3 (0.0, 0.0, 0.0)))
+    (replicate (getStaticImageWidth staticEnv) (albedo (0.0, 0.0, 0.0)))
     sampleGroups
 
 
 -- Scenes
+
+makeCornellBoxScene :: Time -> Time -> RandGen -> (Scene, RandGen)
+makeCornellBoxScene t0 t1 gen = runST $ do
+  gRef  <- newSTRef gen
+  world <- runReaderT
+    (do
+      let red   = Lambertian $ ConstantColor (albedo (0.65, 0.05, 0.05))
+      let white = Lambertian $ ConstantColor (albedo (0.73, 0.73, 0.73))
+      let green = Lambertian $ ConstantColor (albedo (0.12, 0.45, 0.15))
+      let light = DiffuseLight $ ConstantColor (albedo (15, 15, 15))
+      makeBVH
+        t0
+        t1
+        (   Rect (YZRect 0 555 0 555 555 green)
+        :<| Rect (YZRect 0 555 0 555 0 red)
+        :<| Rect (XZRect 213 343 227 332 554 light)
+        :<| Rect (XZRect 0 555 0 555 0 white)
+        :<| Rect (XZRect 0 555 0 555 555 white)
+        :<| Rect (XYRect 0 555 0 555 555 white)
+        :<| Empty
+        )
+    )
+    (dummyRenderEnv gRef)
+  g1 <- readSTRef gRef
+  return ((world, albedo (0.0, 0.0, 0.0)), g1)
+
+cornellCamera :: (Int, Int) -> Camera
+cornellCamera (imageWidth, imageHeight) =
+  newCamera
+    (Vec3 (278, 278, -800))
+    (Vec3 (278, 278, 0.0))
+    (Vec3 (0.0, 1.0, 0.0))
+    40.0
+    (fromIntegral imageWidth / fromIntegral imageHeight)
+    0.1
+    10.0
+    0.0
+    1.0
 
 makeSimpleLightScene :: Time -> Time -> RandGen -> (Scene, RandGen)
 makeSimpleLightScene t0 t1 gen =
@@ -943,19 +988,19 @@ makeSimpleLightScene t0 t1 gen =
       runReaderT
         (do perText <- makePerlin 1.0
             let difflight =
-                  DiffuseLight $ ConstantColor $ Albedo $ Vec3 (4, 4, 4)
+                  DiffuseLight $ ConstantColor $ albedo (4, 4, 4)
             makeBVH
               t0
               t1
               (    Sphere (Vec3 (0, -1000, 0)) 1000 (Lambertian perText)
---               :<| Sphere (Vec3 (0, 2, 0)) 2 (Lambertian (ConstantColor $ Albedo $ Vec3 (0.5, 0.0, 0.3)))
+--               :<| Sphere (Vec3 (0, 2, 0)) 2 (Lambertian (ConstantColor $ albedo (0.5, 0.0, 0.3)))
                :<| Sphere (Vec3 (0, 2, 0)) 2 (Lambertian perText)
                :<| Sphere (Vec3 (0, 7, 0)) 2 difflight
                :<| Rect (XYRect 3 5 1 3 (-2) difflight)
                :<| Empty))
         (dummyRenderEnv gRef)
     g1 <- readSTRef gRef
-    return ((world, Albedo $ Vec3 (0.0, 0.0, 0.0)), g1)
+    return ((world, albedo (0.0, 0.0, 0.0)), g1)
 
 earthTexture :: IO Texture
 earthTexture = do
@@ -978,7 +1023,7 @@ makeEarthScene earthTex t0 t1 gen =
            (Sphere (Vec3 (0, 0, 0)) 2 (Lambertian earthTex) :<| Empty))
         (dummyRenderEnv gRef)
     g1 <- readSTRef gRef
-    return ((world, Albedo $ Vec3 (0, 0, 0)), g1)
+    return ((world, albedo (0, 0, 0)), g1)
 
 twoSpheresSceneCamera :: (Int, Int) -> Camera
 twoSpheresSceneCamera (imageWidth, imageHeight) =
@@ -1008,7 +1053,7 @@ makeTwoPerlinSpheresScene t0 t1 gen =
                Empty))
         (dummyRenderEnv gRef)
     g1 <- readSTRef gRef
-    return ((world, Albedo $ Vec3 (0, 0, 0)), g1)
+    return ((world, albedo (0, 0, 0)), g1)
 
 makeTwoSpheresScene :: Time -> Time -> RandGen -> (Scene, RandGen)
 makeTwoSpheresScene t0 t1 gen =
@@ -1016,11 +1061,11 @@ makeTwoSpheresScene t0 t1 gen =
     let checkerMaterial =
           Metal
             (CheckerTexture
-               (ConstantColor $ Albedo $ Vec3 (0.2, 0.3, 0.1))
-               (ConstantColor $ Albedo $ Vec3 (0.9, 0.9, 0.9)))
+               (ConstantColor $ albedo (0.2, 0.3, 0.1))
+               (ConstantColor $ albedo (0.9, 0.9, 0.9)))
             (Fuzz 0.0)
     let flatMaterial =
-          Lambertian (ConstantColor $ Albedo $ Vec3 (0.6, 0.2, 0.1))
+          Lambertian (ConstantColor $ albedo (0.6, 0.2, 0.1))
     gRef <- newSTRef gen
     world <-
       runReaderT
@@ -1032,7 +1077,7 @@ makeTwoSpheresScene t0 t1 gen =
             Empty))
         (dummyRenderEnv gRef)
     g1 <- readSTRef gRef
-    return ((world, Albedo $ Vec3 (0, 0, 0)), g1)
+    return ((world, albedo (0, 0, 0)), g1)
 
 randomSceneCamera :: (Int, Int) -> Camera
 randomSceneCamera (imageWidth, imageHeight) =
@@ -1063,27 +1108,27 @@ makeRandomScene earthtex _ _ gen =
             Sphere
               (Vec3 (0.0, -1000.0, 0.0))
               1000
-              -- (Lambertian (ConstantColor $ Albedo $ Vec3 (0.5, 0.5, 0.5))) --gray
+              -- (Lambertian (ConstantColor $ albedo (0.5, 0.5, 0.5))) --gray
               (Lambertian
                  (CheckerTexture
-                    (ConstantColor $ Albedo $ Vec3 (0.2, 0.3, 0.1))
-                    (ConstantColor $ Albedo $ Vec3 (0.9, 0.9, 0.9))))
+                    (ConstantColor $ albedo (0.2, 0.3, 0.1))
+                    (ConstantColor $ albedo (0.9, 0.9, 0.9))))
       let s1 =
             Sphere (Vec3 (0.0, 1.0, 0.0)) 1.0 (Dielectric (RefractiveIdx 1.5))
       let s2 =
             Sphere
               (Vec3 (-4.0, 1.0, 0.0))
               1.0
-              -- (Lambertian (ConstantColor $ Albedo $ Vec3 (0.4, 0.2, 0.1)))
+              -- (Lambertian (ConstantColor $ albedo (0.4, 0.2, 0.1)))
               (Lambertian earthtex)
       let s3 =
             Sphere
               (Vec3 (4.0, 1.0, 0.0))
               1.0
-              (Metal (ConstantColor $ Albedo $ Vec3 (0.7, 0.6, 0.5)) (Fuzz 0.0))
+              (Metal (ConstantColor $ albedo (0.7, 0.6, 0.5)) (Fuzz 0.0))
       nps <- catMaybes <$> mapM makeRandomSphereM ns
       world <- makeBVH 0.0 1.0 $ ground :<| s1 :<| s2 :<| s3 :<| S.fromList nps
-      return (world, Albedo $ Vec3 (0.7, 0.8, 0.9))
+      return (world, albedo (0.7, 0.8, 0.9))
     makeRandomSphereM :: (Int, Int) -> RandomState s (Maybe Hittable)
     makeRandomSphereM (a, b) = do
       mat <- randomDoubleM
@@ -1099,7 +1144,7 @@ makeRandomScene earthtex _ _ gen =
                      a2 <- randomVec3DoubleM
                      sph_move_x <- randomDoubleRM (-0.25) 0.25
                      sph_move_z <- randomDoubleRM (-0.25) 0.25
-                     let albedo = Albedo $ a1 `vecMul` a2
+                     let alb = Albedo $ a1 `vecMul` a2
                      return $
                        Just $
                        MovingSphere
@@ -1108,17 +1153,17 @@ makeRandomScene earthtex _ _ gen =
                          0.0
                          1.0
                          0.2
-                         (Lambertian (ConstantColor albedo))
+                         (Lambertian (ConstantColor alb))
                 | mat < 0.95 -- Metal
                  ->
-                  do albedo <- Albedo <$> randomVec3DoubleRM 0.5 1.0
+                  do alb <- Albedo <$> randomVec3DoubleRM 0.5 1.0
                      fuzz <- randomDoubleRM 0.0 0.5
                      return $
                        Just $
                        Sphere
                          center
                          0.2
-                         (Metal (ConstantColor albedo) (Fuzz fuzz))
+                         (Metal (ConstantColor alb) (Fuzz fuzz))
                 | otherwise --Glass
                  ->
                   return $

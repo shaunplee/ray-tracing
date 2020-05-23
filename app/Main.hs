@@ -2,7 +2,7 @@ module Main where
 
 import           Control.Monad (replicateM)
 import           Lib
-import           System.IO     (hPutStr, stderr)
+import           System.IO     (hPutStr, stderr, stdout)
 
 -- X and Y dimensions of output image
 defaultImageWidth :: Int
@@ -31,14 +31,16 @@ main = do
   putStrLn "255"
   let gen = randGen 1024 -- Fix a seed for comparable performance tests
   --et <- earthTexture
+  --let camera = randomSceneCamera (imageWidth, imageHeight)
   --let (world, g1) = makeRandomScene et 0.0 1.0 gen
+  --let camera = twoSpheresSceneCamera (imageWidth, imageHeight)
   --let (world, g1) = makeEarthScene et 0.0 1.0 gen
   --let (world, g1) = makeTwoPerlinSpheresScene 0.0 1.0 gen
-  let (world, g1) = makeSimpleLightScene 0.0 1.0 gen
+  --let (world, g1) = makeSimpleLightScene 0.0 1.0 gen
+  let camera = cornellCamera (imageWidth, imageHeight)
+  let (world, g1) = makeCornellBoxScene 0.0 1.0 gen
   gs <- replicateM (defaultnThreads - 1) newRandGen
   let gens = g1 : gs
-  --let camera = randomSceneCamera (imageWidth, imageHeight)
-  let camera = twoSpheresSceneCamera (imageWidth, imageHeight)
   let staticEnv =
         mkRenderStaticEnv
           world
@@ -48,5 +50,5 @@ main = do
           defaultMaxDepth
           (length gens)
   let vals = runRender staticEnv gens
-  mapM_ (printRow imageHeight) (zip [1 .. imageHeight] vals)
+  mapM_ (printRow stdout imageHeight) (zip [1 .. imageHeight] vals)
   hPutStr stderr "\nDone.\n"
