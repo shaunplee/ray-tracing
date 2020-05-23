@@ -608,9 +608,9 @@ makeBVH t0 t1 htbls = do
 boxCompare ::
      (Vec3 -> Double) -> Time -> Time -> Hittable -> Hittable -> Ordering
 boxCompare compAxis t0 t1 boxa boxb =
-  compare
-    (compAxis (box_min (boundingBox boxa t0 t1)))
-    (compAxis (box_min (boundingBox boxb t0 t1)))
+  let (Box bmA _) = boundingBox boxa t0 t1
+      (Box bmB _) = boundingBox boxb t0 t1
+   in compare (compAxis bmA) (compAxis bmB)
 
 hit :: Hittable -> Ray -> Double -> Double -> Maybe Hit
 hit (BVHNode bvh_l bvh_r box) r t_min t_max =
@@ -783,31 +783,31 @@ _randomInHemisphereM n = do
     else return (vecNegate inUnitSphere)
 
 data Camera = Camera
-  { camera_origin     :: XYZ
-  , camera_llc        :: XYZ
-  , camera_horiz      :: XYZ
-  , camera_vert       :: XYZ
-  , camera_u          :: XYZ
-  , camera_v          :: XYZ
-  , _camera_w         :: XYZ
-  , camera_lensRadius :: Double
-  , camera_t0         :: Double
-  , camera_t1         :: Double
-  }
+  XYZ    -- |  camera_origin
+  XYZ    -- |  camera_llc
+  XYZ    -- |  camera_horiz
+  XYZ    -- |  camera_vert
+  XYZ    -- |  camera_u
+  XYZ    -- |  camera_v
+  XYZ    -- |  _camera_w
+  Double -- |  camera_lensRadius
+  Double -- |  camera_t0
+  Double -- |  camera_t1
 
 getRay :: Camera -> Double -> Double -> RandomState s Ray
-getRay c s t = do
-  rd <- fmap (scale $ camera_lensRadius c) randomInUnitDiskM
-  let offset =
-        scale (vecX rd) (camera_u c) `vecAdd` scale (vecY rd) (camera_v c)
-  tm <- randomDoubleRM (camera_t0 c) (camera_t1 c)
-  return $
-    Ray
-      (camera_origin c `vecAdd` offset)
-      (camera_llc c `vecAdd` scale s (camera_horiz c) `vecAdd`
-       scale t (camera_vert c) `vecSub`
-       camera_origin c `vecSub`
-       offset)
+getRay (Camera c_or c_llc c_horiz c_vert c_u c_v _ c_lr c_time0 c_time1) s t =
+  do
+    rd <- fmap (scale c_lr) randomInUnitDiskM
+    let offset = scale (vecX rd) c_u `vecAdd` scale (vecY rd) c_v
+    tm <- randomDoubleRM c_time0 c_time1
+    return $ Ray
+      (c_or `vecAdd` offset)
+      (        c_llc
+      `vecAdd` scale s c_horiz
+      `vecAdd` scale t c_vert
+      `vecSub` c_or
+      `vecSub` offset
+      )
       tm
 
 newCamera ::
