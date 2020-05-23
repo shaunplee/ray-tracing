@@ -441,6 +441,12 @@ data Hittable
             Box      -- | bvh_box
   deriving (Show)
 
+sphere :: Vec3 -> Double -> Material -> Hittable
+sphere = Sphere
+
+movingSphere :: Vec3 -> Vec3 -> Time -> Time -> Double -> Material -> Hittable
+movingSphere = MovingSphere
+
 data Rectangle
   = XYRect Double   -- | xyrect_x0
            Double   -- | xyrect_x1
@@ -461,6 +467,15 @@ data Rectangle
            Double   -- | _yzrect_k
            Material -- | _yzrect_material
     deriving Show
+
+xyRect :: Double -> Double -> Double -> Double -> Double -> Material -> Hittable
+xyRect x0 x1 y0 y1 k mat = Rect $ XYRect x0 x1 y0 y1 k mat
+
+xzRect :: Double -> Double -> Double -> Double -> Double -> Material -> Hittable
+xzRect x0 x1 z0 z1 k mat = Rect $ XZRect x0 x1 z0 z1 k mat
+
+yzRect :: Double -> Double -> Double -> Double -> Double -> Material -> Hittable
+yzRect y0 y1 z0 z1 k mat = Rect $ YZRect y0 y1 z0 z1 k mat
 
 data Box = Box
   { box_min :: Vec3
@@ -653,9 +668,10 @@ hit (Rect rect) r@(Ray ror rdr _) t_min t_max =
                             Hit t p normal rec_u rec_v frontFace mat
       where
         t = (k - vecK ror) / vecK rdr
-hit sphere r@(Ray ror rdr tm) t_min t_max =
-  let sc = sphCenter sphere tm
-      sr = sphRadius sphere
+
+hit sph r@(Ray ror rdr tm) t_min t_max =
+  let sc = sphCenter sph tm
+      sr = sphRadius sph
       oc = ror `vecSub` sc
       a = dot rdr rdr
       b = seq oc (dot oc rdr)
@@ -666,17 +682,17 @@ hit sphere r@(Ray ror rdr tm) t_min t_max =
                  temp1 = ((-b) - sd) / a
                  temp2 = ((-b) + sd) / a
               in if | t_min < temp1 && temp1 < t_max ->
-                      Just $ recHit temp1 r sphere
+                      Just $ recHit temp1 r sph
                     | t_min < temp2 && temp2 < t_max ->
-                      Just $ recHit temp2 r sphere
+                      Just $ recHit temp2 r sph
                     | otherwise -> Nothing
         else Nothing
 
 recHit :: Double -> Ray -> Hittable -> Hit
-recHit temp r@(Ray _ dr tm) sphere =
-  let sc = sphCenter sphere tm
-      sr = sphRadius sphere
-      sm = sphMaterial sphere
+recHit temp r@(Ray _ dr tm) sph =
+  let sc = sphCenter sph tm
+      sr = sphRadius sph
+      sm = sphMaterial sph
       p = r `at` temp
       pShift = p `vecSub` sc
       outwardNormal = divide pShift sr
@@ -954,12 +970,12 @@ makeCornellBoxScene t0 t1 gen = runST $ do
       makeBVH
         t0
         t1
-        (   Rect (YZRect 0 555 0 555 555 green)
-        :<| Rect (YZRect 0 555 0 555 0 red)
-        :<| Rect (XZRect 213 343 227 332 554 light)
-        :<| Rect (XZRect 0 555 0 555 0 white)
-        :<| Rect (XZRect 0 555 0 555 555 white)
-        :<| Rect (XYRect 0 555 0 555 555 white)
+        (   yzRect 0 555 0 555 555 green
+        :<| yzRect 0 555 0 555 0 red
+        :<| xzRect 213 343 227 332 554 light
+        :<| xzRect 0 555 0 555 0 white
+        :<| xzRect 0 555 0 555 555 white
+        :<| xyRect 0 555 0 555 555 white
         :<| Empty
         )
     )
@@ -992,11 +1008,11 @@ makeSimpleLightScene t0 t1 gen =
             makeBVH
               t0
               t1
-              (    Sphere (Vec3 (0, -1000, 0)) 1000 (Lambertian perText)
+              (    sphere (Vec3 (0, -1000, 0)) 1000 (Lambertian perText)
 --               :<| Sphere (Vec3 (0, 2, 0)) 2 (Lambertian (ConstantColor $ albedo (0.5, 0.0, 0.3)))
-               :<| Sphere (Vec3 (0, 2, 0)) 2 (Lambertian perText)
-               :<| Sphere (Vec3 (0, 7, 0)) 2 difflight
-               :<| Rect (XYRect 3 5 1 3 (-2) difflight)
+               :<| sphere (Vec3 (0, 2, 0)) 2 (Lambertian perText)
+               :<| sphere (Vec3 (0, 7, 0)) 2 difflight
+               :<| (xyRect 3 5 1 3 (-2) difflight)
                :<| Empty))
         (dummyRenderEnv gRef)
     g1 <- readSTRef gRef
@@ -1147,7 +1163,7 @@ makeRandomScene earthtex _ _ gen =
                      let alb = Albedo $ a1 `vecMul` a2
                      return $
                        Just $
-                       MovingSphere
+                       movingSphere
                          center
                          (center `vecAdd` Vec3 (sph_move_x, 0, sph_move_z))
                          0.0
