@@ -265,25 +265,25 @@ printRow handle imageHeight (i, row) = do
 showRow :: [RGB] -> String
 showRow row = unwords $ fmap show row
 
-data Ray = Ray
-  { ray_origin    :: XYZ
-  , ray_direction :: XYZ
-  , ray_time      :: Double
-  } deriving Show
+data Ray =
+  Ray XYZ -- | ray_origin
+      XYZ -- | ray_direction
+      Double -- | ray_time
+  deriving (Show)
 
 at :: Ray -> Double -> XYZ
 at (Ray orn dr _) t = orn `vecAdd` scale t dr
 
 data Hit
-  = Hit { _hit_t         :: Double
-        , hit_p          :: XYZ
-        , _hit_normal    :: XYZ -- | vector normal to the surface of the object
-                         -- at the point of the hit
-        , hit_u          :: Double
-        , hit_v          :: Double
-        , _hit_frontFace :: Bool -- | did the ray hit the outer face of the
-                           -- object?
-        , hit_material   :: Material }
+  = Hit Double   -- | hit_t
+        XYZ      -- | hit_p
+        XYZ      -- | hit_normal - vector normal to the surface of the object
+                 -- at the point of the hit
+        Double   -- | hit_u
+        Double   -- | hit_v
+        Bool     -- | hit_frontFace --  did the ray hit the outer face of the
+                 -- object?                   -
+        Material -- | hit_material}
 
 data Material
   = Lambertian Texture
@@ -318,19 +318,18 @@ instance Show Image where
   show _ = "<Image>"
 
 data Texture
-  = ConstantColor { constColor :: Albedo }
-  | CheckerTexture { checkerTextureOdd  :: Texture
-                   , checkerTextureEven :: Texture }
-  | Perlin { perlinRanFloat :: VV.Vector Vec3
-           , perlinPermX    :: Vector Int
-           , perlinPermY    :: Vector Int
-           , perlinPermZ    :: Vector Int
-           , perlinScale    :: Double
-           }
-  | ImageTexture { imageTexture_image  :: Maybe Image
-                 , imageTexture_width  :: Int
-                 , imageTexture_height :: Int}
-  deriving Show
+  = ConstantColor Albedo
+  | CheckerTexture Texture -- | checkerTextureOdd
+                   Texture -- | checkerTextureEven
+  | Perlin (VV.Vector Vec3) -- | perlinRanFloat
+           (Vector Int) -- | perlinPermX
+           (Vector Int) -- | perlinPermY
+           (Vector Int) -- | perlinPermZ
+           Double -- | perlinScale
+  | ImageTexture (Maybe Image) -- | imageTexture_image
+                 Int -- | imageTexture_width
+                 Int -- | imageTexture_height
+  deriving (Show)
 
 pointCount :: Int
 pointCount = 256
@@ -427,40 +426,40 @@ marbleTexture :: Texture -> Vec3 -> Double
 marbleTexture ptex p = 0.5 * (1.0 + sin (vecZ p + 10 * turb ptex p 7))
 
 data Hittable
-  = Sphere { sphere_center   :: Vec3
-           , sphere_radius   :: Double
-           , sphere_material :: Material }
-  | MovingSphere { msphere_center0  :: Vec3
-                 , msphere_center1  :: Vec3
-                 , msphere_time0    :: Time
-                 , msphere_time1    :: Time
-                 , msphere_radius   :: Double
-                 , msphere_material :: Material }
+  = Sphere Vec3     -- | sphere_center
+           Double   -- | sphere_radius
+           Material -- | sphere_material
+  | MovingSphere Vec3     -- | msphere_center0
+                 Vec3     -- | msphere_center1
+                 Time     -- | msphere_time0
+                 Time     -- | msphere_time1
+                 Double   -- | msphere_radius
+                 Material -- | msphere_material
   | Rect Rectangle
-  | BVHNode { bvh_left  :: Hittable
-            , bvh_right :: Hittable
-            , bvh_box   :: Box }
-  deriving Show
+  | BVHNode Hittable -- | bvh_left
+            Hittable -- | bvh_right
+            Box      -- | bvh_box
+  deriving (Show)
 
 data Rectangle
-  = XYRect { _xyrect_x0       :: Double
-           , _xyrect_x1       :: Double
-           , _xyrect_y0       :: Double
-           , _xyrect_y1       :: Double
-           , _xyrect_k        :: Double
-           , _xyrect_material :: Material }
-  | XZRect { _xzrect_x0       :: Double
-           , _xzrect_x1       :: Double
-           , _xzrect_z0       :: Double
-           , _xzrect_z1       :: Double
-           , _xzrect_k        :: Double
-           , _xzrect_material :: Material }
-  | YZRect { _yzrect_y0       :: Double
-           , _yzrect_y1       :: Double
-           , _yzrect_z0       :: Double
-           , _yzrect_z1       :: Double
-           , _yzrect_k        :: Double
-           , _yzrect_material :: Material }
+  = XYRect Double   -- | xyrect_x0
+           Double   -- | xyrect_x1
+           Double   -- | xyrect_y0
+           Double   -- | xyrect_y1
+           Double   -- | xyrect_k
+           Material -- | xyrect_material
+  | XZRect Double   -- | _xzrect_x0
+           Double   -- | _xzrect_x1
+           Double   -- | _xzrect_z0
+           Double   -- | _xzrect_z1
+           Double   -- | _xzrect_k
+           Material -- | _xzrect_material
+  | YZRect Double   -- | _yzrect_y0
+           Double   -- | _yzrect_y1
+           Double   -- | _yzrect_z0
+           Double   -- | _yzrect_z1
+           Double   -- | _yzrect_k
+           Material -- | _yzrect_material
     deriving Show
 
 data Box = Box
@@ -502,34 +501,36 @@ sphMaterial (MovingSphere _ _ _ _ _ m) = m
 sphMaterial x = error $ "sphMaterial called on non-sphere " ++ show x
 
 scatter :: Material -> Ray -> Hit -> RandomState s (Maybe (Ray, Albedo))
-scatter (Lambertian tex) rin (Hit _ hp hn hu hv _ _) = do
+scatter (Lambertian tex) (Ray _ _ rtime) (Hit _ hp hn hu hv _ _) = do
   rUnit <- randomUnitVectorM
   let scatterDirection = hn `vecAdd` rUnit
-  let scattered = Ray hp scatterDirection (ray_time rin)
+  let scattered = Ray hp scatterDirection rtime
   return $ Just (scattered, textureValue tex hu hv hp)
-scatter (Metal tex (Fuzz fuzz)) rin (Hit _ hp hn hu hv _ _) = do
+scatter (Metal tex (Fuzz fuzz)) (Ray _ rdr rtime) (Hit _ hp hn hu hv _ _) = do
   rUnit <- randomUnitVectorM
-  let reflected = reflect (makeUnitVector (ray_direction rin)) hn
-  let scattered = Ray hp (reflected `vecAdd` scale fuzz rUnit) (ray_time rin)
-  return $ if dot (ray_direction scattered) hn > 0.0
-           then Just (scattered, textureValue tex hu hv hp)
-           else Nothing
-scatter (Dielectric (RefractiveIdx ref_idx)) rin (Hit _ hp hn _ _ hff _) = do
+  let reflected = reflect (makeUnitVector rdr) hn
+  let scattered@(Ray _ scat_dir _) =
+        Ray hp (reflected `vecAdd` scale fuzz rUnit) rtime
+  return $
+    if dot scat_dir hn > 0.0
+      then Just (scattered, textureValue tex hu hv hp)
+      else Nothing
+scatter (Dielectric (RefractiveIdx ref_idx)) (Ray _ rdr rtime) (Hit _ hp hn _ _ hff _) = do
   let alb = albedo (1.0, 1.0, 1.0)
   let etaiOverEtat =
         if hff
           then 1.0 / ref_idx
           else ref_idx
-  let unitDirection = makeUnitVector (ray_direction rin)
+  let unitDirection = makeUnitVector rdr
   let cosTheta = min (dot (vecNegate unitDirection) hn) 1.0
   let sinTheta = sqrt (1.0 - cosTheta * cosTheta)
   rd <- randomDoubleM
   return $
     if (etaiOverEtat * sinTheta > 1.0) || rd < schlick cosTheta etaiOverEtat
       then let reflected = reflect unitDirection hn
-            in Just (Ray hp reflected (ray_time rin), alb)
+            in Just (Ray hp reflected rtime, alb)
       else let refracted = refract unitDirection hn etaiOverEtat
-            in Just (Ray hp refracted (ray_time rin), alb)
+            in Just (Ray hp refracted rtime, alb)
 scatter DiffuseLight {} _ _  = return Nothing
 
 emitted :: Material -> Double -> Double -> Vec3 -> Albedo
@@ -850,10 +851,9 @@ rayColor ray depth = rayColorHelp ray depth id
             Nothing -> do
               bgd <- asks getBackground
               return $ alb_acc bgd
-            Just h -> do
-              let em@(Albedo emv) =
-                    emitted (hit_material h) (hit_u h) (hit_v h) (hit_p h)
-              mscatter <- scatter (hit_material h) r h
+            Just h@(Hit _ hp _ hu hv _ hm) -> do
+              let em@(Albedo emv) = emitted hm hu hv hp
+              mscatter <- scatter hm r h
               case mscatter of
                 Nothing -> return $ alb_acc em
                 Just (sray, Albedo att) ->
