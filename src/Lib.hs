@@ -425,6 +425,12 @@ textureValue (ImageTexture Nothing _ _) _ _ _ = albedo (0, 1, 1)
 marbleTexture :: Texture -> Vec3 -> Double
 marbleTexture ptex p = 0.5 * (1.0 + sin (vecZ p + 10 * turb ptex p 7))
 
+data Axis = XAxis | YAxis | ZAxis
+  deriving Show
+
+data Plane = XYPlane | XZPlane | YZPlane
+  deriving Show
+
 data Hittable
   = Sphere Vec3     -- | sphere_center
            Double   -- | sphere_radius
@@ -444,6 +450,11 @@ data Hittable
             Box      -- | bvh_box
   | Translate Hittable  -- | the translated Hittable
               Vec3      -- | translation offset
+  | Rotate Hittable -- | the rotated Hittable
+           Axis     -- | the axis of rotation
+           Double   -- | sin theta
+           Double   -- | cos theta
+           Box      -- | the BoundingBox
   deriving (Show)
 
 sphere :: Vec3 -> Double -> Material -> Hittable
@@ -485,14 +496,74 @@ data Rectangle
            Material -- | _yzrect_material
     deriving Show
 
-xyRect :: Double -> Double -> Double -> Double -> Double -> Material -> Hittable
-xyRect x0 x1 y0 y1 k mat = Rect $ XYRect x0 x1 y0 y1 k mat
+rect ::
+     Plane
+  -> Double
+  -> Double
+  -> Double
+  -> Double
+  -> Double
+  -> Material
+  -> Hittable
+rect XYPlane x0 x1 y0 y1 k mat = Rect $ XYRect x0 x1 y0 y1 k mat
+rect XZPlane x0 x1 z0 z1 k mat = Rect $ XZRect x0 x1 z0 z1 k mat
+rect YZPlane y0 y1 z0 z1 k mat = Rect $ YZRect y0 y1 z0 z1 k mat
 
-xzRect :: Double -> Double -> Double -> Double -> Double -> Material -> Hittable
-xzRect x0 x1 z0 z1 k mat = Rect $ XZRect x0 x1 z0 z1 k mat
+translate :: XYZ -> Hittable -> Hittable
+translate = flip Translate
 
-yzRect :: Double -> Double -> Double -> Double -> Double -> Material -> Hittable
-yzRect y0 y1 z0 z1 k mat = Rect $ YZRect y0 y1 z0 z1 k mat
+degreesToRadians :: Double -> Double
+degreesToRadians angle = angle * pi / 180.0
+
+rotate :: Axis -> Double -> Hittable -> Hittable
+rotate axis angle h = Rotate h axis sin_theta cos_theta (Box h_min h_max)
+  where
+    rad = degreesToRadians angle
+    sin_theta = sin rad
+    cos_theta = cos rad
+    (Box (Vec3 (bbMinX, bbMinY, bbMinZ)) (Vec3 (bbMaxX, bbMaxY, bbMaxZ))) =
+      boundingBox h Nothing
+    updateMinMax :: XYZ -> (XYZ, XYZ) -> (XYZ, XYZ)
+    updateMinMax (Vec3 (i, j, k)) (Vec3 (minX, minY, minZ), Vec3 (maxX, maxY, maxZ)) =
+      let x = i * bbMaxX + (1 - i) * bbMinX
+          y = j * bbMaxY + (1 - j) * bbMinY
+          z = k * bbMaxZ + (1 - k) * bbMinZ
+          Vec3 (newX, newY, newZ) =
+            rotatePoint axis sin_theta cos_theta (Vec3 (x, y, z))
+       in ( Vec3 (min newX minX, min newY minY, min newZ minZ)
+          , Vec3 (max newX maxX, max newY maxY, max newZ maxZ))
+    (h_min, h_max) =
+      foldr
+        updateMinMax
+        ( Vec3 (infinity, infinity, infinity)
+        , Vec3 (-infinity, -infinity, -infinity))
+        ([Vec3 (i, j, k) | i <- [0, 1, 2], j <- [0, 1, 2], k <- [0, 1, 2]])
+
+rotatePoint :: Axis -> Double -> Double -> XYZ -> XYZ
+rotatePoint axis sin_theta cos_theta (Vec3 (pX, pY, pZ)) =
+  case axis of
+    XAxis ->
+      Vec3
+        (pX, cos_theta * pY - sin_theta * pZ, sin_theta * pY + cos_theta * pZ)
+    YAxis ->
+      Vec3
+        (cos_theta * pX + sin_theta * pZ, pY, -sin_theta * pX + cos_theta * pZ)
+    ZAxis ->
+      Vec3
+        (cos_theta * pX - sin_theta * pY, sin_theta * pX + cos_theta * pY, pZ)
+
+unRotatePoint :: Axis -> Double -> Double -> XYZ -> XYZ
+unRotatePoint axis sin_theta cos_theta (Vec3 (pX, pY, pZ)) =
+  case axis of
+    XAxis ->
+      Vec3
+        (pX, cos_theta * pY + sin_theta * pZ, -sin_theta * pY + cos_theta * pZ)
+    YAxis ->
+      Vec3
+        (cos_theta * pX - sin_theta * pZ, pY, sin_theta * pX + cos_theta * pZ)
+    ZAxis ->
+      Vec3
+        (cos_theta * pX + sin_theta * pY, -sin_theta * pX + cos_theta * pY, pZ)
 
 data Box = Box
   { box_min :: Vec3
@@ -587,26 +658,27 @@ schlick cosine ref_idx =
       r1 = r0 * r0
    in r1 + (1.0 - r1) * (1 - cosine) ** 5
 
-boundingBox :: Hittable -> Time -> Time -> Box
-boundingBox (Sphere c r _) _ _ =
+boundingBox :: Hittable -> Maybe (Time, Time) -> Box
+boundingBox (Sphere c r _) _ =
   let rad = Vec3 (r, r, r)
    in Box (c `vecSub` rad) (c `vecAdd` rad)
-boundingBox (MovingSphere c0 c1 _ _ r _) _ _ =
+boundingBox (MovingSphere c0 c1 _ _ r _) _ =
   let rad = Vec3 (r, r, r)
       box0 = Box (c0 `vecSub` rad) (c0 `vecAdd` rad)
       box1 = Box (c1 `vecSub` rad) (c1 `vecAdd` rad)
    in surroundingBox box0 box1
-boundingBox (Rect (XYRect x0 x1 y0 y1 k _)) _ _ =
+boundingBox (Rect (XYRect x0 x1 y0 y1 k _)) _ =
   Box (Vec3 (x0, y0, k - epsilon)) (Vec3 (x1, y1, k + epsilon))
-boundingBox (Rect (XZRect x0 x1 z0 z1 k _)) _ _ =
+boundingBox (Rect (XZRect x0 x1 z0 z1 k _)) _ =
   Box (Vec3 (x0, k - epsilon, z0)) (Vec3 (x1, k + epsilon, z1))
-boundingBox (Rect (YZRect y0 y1 z0 z1 k _)) _ _ =
+boundingBox (Rect (YZRect y0 y1 z0 z1 k _)) _ =
   Box (Vec3 (k - epsilon, y0, z0)) (Vec3 (k + epsilon, y1, z1))
-boundingBox (BVHNode _ _ box) _ _ = box
-boundingBox (Cuboid c_min c_max _) _ _ = Box c_min c_max
-boundingBox (Translate h offset) time0 time1 =
-  let (Box b_min b_max) = boundingBox h time0 time1
+boundingBox (BVHNode _ _ box) _ = box
+boundingBox (Cuboid c_min c_max _) _ = Box c_min c_max
+boundingBox (Translate h offset) mtime =
+  let (Box b_min b_max) = boundingBox h mtime
    in Box (b_min `vecAdd` offset) (b_max `vecAdd` offset)
+boundingBox (Rotate _ _ _ _ box) _ = box
 
 surroundingBox :: Box -> Box -> Box
 surroundingBox (Box b0min b0max) (Box b1min b1max) =
@@ -619,10 +691,10 @@ surroundingBox (Box b0min b0max) (Box b1min b1max) =
       big = Vec3 (max b0max_x b1max_x, max b0max_y b1max_y, max b0max_z b1max_z)
    in Box small big
 
-makeBVH :: Time -> Time -> Seq Hittable -> RandomState s Hittable
-makeBVH t0 t1 htbls = do
+makeBVH :: Maybe (Time, Time) -> Seq Hittable -> RandomState s Hittable
+makeBVH mtime htbls = do
   axis <- floor <$> randomDoubleRM 0 3
-  let comparator = boxCompare ([vecX, vecY, vecZ] !! axis) t0 t1
+  let comparator = boxCompare ([vecX, vecY, vecZ] !! axis) mtime
   let objectSpan = S.length htbls
   (bvh_lt, bvh_rt) <-
     case htbls of
@@ -634,18 +706,18 @@ makeBVH t0 t1 htbls = do
       _ -> do
         let (lt_htbls, rt_htbls) =
               S.splitAt (objectSpan `div` 2) (S.sortBy comparator htbls)
-        lt <- makeBVH t0 t1 lt_htbls
-        rt <- makeBVH t0 t1 rt_htbls
+        lt <- makeBVH mtime lt_htbls
+        rt <- makeBVH mtime rt_htbls
         return (lt, rt)
   let bvh_bx =
-        surroundingBox (boundingBox bvh_lt t0 t1) (boundingBox bvh_rt t0 t1)
+        surroundingBox (boundingBox bvh_lt mtime) (boundingBox bvh_rt mtime)
   return (BVHNode bvh_lt bvh_rt bvh_bx)
 
 boxCompare ::
-     (Vec3 -> Double) -> Time -> Time -> Hittable -> Hittable -> Ordering
-boxCompare compAxis t0 t1 boxa boxb =
-  let (Box bmA _) = boundingBox boxa t0 t1
-      (Box bmB _) = boundingBox boxb t0 t1
+     (Vec3 -> Double) -> Maybe (Time, Time) -> Hittable -> Hittable -> Ordering
+boxCompare compAxis mtime boxa boxb =
+  let (Box bmA _) = boundingBox boxa mtime
+      (Box bmB _) = boundingBox boxb mtime
    in compare (compAxis bmA) (compAxis bmB)
 
 hit :: Hittable -> Ray -> Double -> Double -> Maybe Hit
@@ -670,8 +742,8 @@ hit (Cuboid _ _ rl) r t_min t_max =
     closerHit Nothing (Just h2) = Just h2
     closerHit h1@(Just (Hit t1 _ _ _ _ _ _)) h2@(Just (Hit t2 _ _ _ _ _ _)) =
       if t1 < t2 then h1 else h2
-hit (Rect rect) r@(Ray ror rdr _) t_min t_max =
-  case rect of
+hit (Rect rct) r@(Ray ror rdr _) t_min t_max =
+  case rct of
     (XYRect x0 x1 y0 y1 k rmat) ->
       rectHit x0 x1 y0 y1 vecX vecY vecZ (Vec3 (0, 0, 1)) k rmat
     (XZRect x0 x1 z0 z1 k rmat) ->
@@ -701,6 +773,21 @@ hit (Translate h offset) (Ray ror rdr tm) t_min t_max =
         Just (Hit t p outwardNormal rec_u rec_v _ mat) ->
           let (mFrontFace, mNormal) = faceNormal m_r outwardNormal
           in Just (Hit t (p `vecAdd` offset) mNormal rec_u rec_v mFrontFace mat)
+hit (Rotate h axis sin_theta cos_theta _) (Ray ror rdr tm) t_min t_max =
+  let rotated_r =
+        Ray
+          (unRotatePoint axis sin_theta cos_theta ror)
+          (unRotatePoint axis sin_theta cos_theta rdr)
+          tm
+   in case hit h rotated_r t_min t_max of
+        Nothing -> Nothing
+        Just (Hit t p outwardNormal u v _ mat) ->
+          let rot_p = rotatePoint axis sin_theta cos_theta p
+              rot_outwardNormal =
+                rotatePoint axis sin_theta cos_theta outwardNormal
+              (rot_frontFace, rot_normal) =
+                faceNormal rotated_r rot_outwardNormal
+           in Just (Hit t rot_p rot_normal u v rot_frontFace mat)
 hit sph r@(Ray ror rdr tm) t_min t_max =
   let sc = sphCenter sph tm
       sr = sphRadius sph
@@ -1004,18 +1091,19 @@ makeCornellBoxScene t0 t1 gen = runST $ do
       let green = Lambertian $ ConstantColor (albedo (0.12, 0.45, 0.15))
       let light = DiffuseLight $ ConstantColor (albedo (15, 15, 15))
       makeBVH
-        t0
-        t1
-        (   yzRect 0 555 0 555 555 green
-        :<| yzRect 0 555 0 555 0   red
-        :<| xzRect 213 343 227 332 554 light
-        :<| xzRect 0   555 0   555 0   white
-        :<| xzRect 0   555 0   555 555 white
-        :<| xyRect 0 555 0 555 555 white
-        :<| cuboid (Vec3 (130, 0, 65)) (Vec3 (295, 165, 230)) white
-        :<| Translate
-              (cuboid (Vec3 (265, 0, 295)) (Vec3 (430, 330, 460)) white)
-              (Vec3 (0, 20, 0))
+        (Just (t0, t1))
+        (   rect YZPlane 0   555 0   555 555 green
+        :<| rect YZPlane 0   555 0   555 0   red
+        :<| rect XZPlane 213 343 227 332 554 light
+        :<| rect XZPlane 0   555 0   555 0   white
+        :<| rect XZPlane 0   555 0   555 555 white
+        :<| rect XYPlane 0   555 0   555 555 white
+        :<| (translate (Vec3 (265, 0, 295)) $ rotate YAxis 15
+              (cuboid (Vec3 (0, 0, 0)) (Vec3 (165, 330, 165)) white))
+        :<| (translate (Vec3 (130, 0, 65)) $
+             rotate YAxis (-18) $
+             rotate ZAxis 30
+              (cuboid (Vec3 (0, 0, 0)) (Vec3 (165, 165, 165)) white))
         :<| Empty
         )
     )
@@ -1037,26 +1125,25 @@ cornellCamera (imageWidth, imageHeight) =
     1.0
 
 makeSimpleLightScene :: Time -> Time -> RandGen -> (Scene, RandGen)
-makeSimpleLightScene t0 t1 gen =
-  runST $ do
-    gRef <- newSTRef gen
-    world <-
-      runReaderT
-        (do perText <- makePerlin 1.0
-            let difflight =
-                  DiffuseLight $ ConstantColor $ albedo (4, 4, 4)
-            makeBVH
-              t0
-              t1
-              (    sphere (Vec3 (0, -1000, 0)) 1000 (Lambertian perText)
+makeSimpleLightScene t0 t1 gen = runST $ do
+  gRef  <- newSTRef gen
+  world <- runReaderT
+    (do
+      perText <- makePerlin 1.0
+      let difflight = DiffuseLight $ ConstantColor $ albedo (4, 4, 4)
+      makeBVH
+        (Just (t0, t1))
+        (   sphere (Vec3 (0, -1000, 0)) 1000 (Lambertian perText)
 --               :<| Sphere (Vec3 (0, 2, 0)) 2 (Lambertian (ConstantColor $ albedo (0.5, 0.0, 0.3)))
-               :<| sphere (Vec3 (0, 2, 0)) 2 (Lambertian perText)
-               :<| sphere (Vec3 (0, 7, 0)) 2 difflight
-               :<| xyRect 3 5 1 3 (-2) difflight
-               :<| Empty))
-        (dummyRenderEnv gRef)
-    g1 <- readSTRef gRef
-    return ((world, albedo (0.0, 0.0, 0.0)), g1)
+        :<| sphere (Vec3 (0, 2, 0))     2    (Lambertian perText)
+        :<| sphere (Vec3 (0, 7, 0))     2    difflight
+        :<| rect XYPlane 3 5 1 3 (-2) difflight
+        :<| Empty
+        )
+    )
+    (dummyRenderEnv gRef)
+  g1 <- readSTRef gRef
+  return ((world, albedo (0.0, 0.0, 0.0)), g1)
 
 earthTexture :: IO Texture
 earthTexture = do
@@ -1074,8 +1161,7 @@ makeEarthScene earthTex t0 t1 gen =
     world <-
       runReaderT
         (makeBVH
-           t0
-           t1
+           (Just (t0, t1))
            (Sphere (Vec3 (0, 0, 0)) 2 (Lambertian earthTex) :<| Empty))
         (dummyRenderEnv gRef)
     g1 <- readSTRef gRef
@@ -1102,8 +1188,7 @@ makeTwoPerlinSpheresScene t0 t1 gen =
       runReaderT
         (do perText <- makePerlin 1.5
             makeBVH
-              t0
-              t1
+              (Just (t0, t1))
               (Sphere (Vec3 (0, -1000, 0)) 1000 (Lambertian perText) :<|
                Sphere (Vec3 (0, 2, 0)) 2 (Lambertian perText) :<|
                Empty))
@@ -1126,8 +1211,7 @@ makeTwoSpheresScene t0 t1 gen =
     world <-
       runReaderT
         (makeBVH
-           t0
-           t1
+           (Just (t0, t1))
            (Sphere (Vec3 (0, -10, 0)) 10 checkerMaterial :<|
             Sphere (Vec3 (0, 10, 0)) 10 flatMaterial :<|
             Empty))
@@ -1161,7 +1245,7 @@ makeRandomScene earthtex _ _ gen =
     makeSceneM = do
       let ns = [(x, y) | x <- [-11 .. 10], y <- [-11 .. 10]]
       let ground =
-            Sphere
+            sphere
               (Vec3 (0.0, -1000.0, 0.0))
               1000
               -- (Lambertian (ConstantColor $ albedo (0.5, 0.5, 0.5))) --gray
@@ -1169,21 +1253,28 @@ makeRandomScene earthtex _ _ gen =
                  (CheckerTexture
                     (ConstantColor $ albedo (0.2, 0.3, 0.1))
                     (ConstantColor $ albedo (0.9, 0.9, 0.9))))
-      let s1 =
-            Sphere (Vec3 (0.0, 1.0, 0.0)) 1.0 (Dielectric (RefractiveIdx 1.5))
+      let s1
+            -- Sphere (Vec3 (0.0, 1.0, 0.0)) 1.0 (Dielectric (RefractiveIdx 1.5))
+           =
+            cuboid
+              (Vec3 (-0.75, 0.0, -0.75))
+              (Vec3 (0.75, 1.5, 0.75))
+              (Dielectric (RefractiveIdx 1.5))
       let s2 =
-            Sphere
+            sphere
               (Vec3 (-4.0, 1.0, 0.0))
               1.0
               -- (Lambertian (ConstantColor $ albedo (0.4, 0.2, 0.1)))
               (Lambertian earthtex)
       let s3 =
-            Sphere
+            sphere
               (Vec3 (4.0, 1.0, 0.0))
               1.0
               (Metal (ConstantColor $ albedo (0.7, 0.6, 0.5)) (Fuzz 0.0))
       nps <- catMaybes <$> mapM makeRandomSphereM ns
-      world <- makeBVH 0.0 1.0 $ ground :<| s1 :<| s2 :<| s3 :<| S.fromList nps
+      world <-
+        makeBVH (Just (0.0, 1.0)) $
+        ground :<| s1 :<| s2 :<| s3 :<| S.fromList nps
       return (world, albedo (0.7, 0.8, 0.9))
     makeRandomSphereM :: (Int, Int) -> RandomState s (Maybe Hittable)
     makeRandomSphereM (a, b) = do
@@ -1216,11 +1307,8 @@ makeRandomScene earthtex _ _ gen =
                      fuzz <- randomDoubleRM 0.0 0.5
                      return $
                        Just $
-                       Sphere
-                         center
-                         0.2
-                         (Metal (ConstantColor alb) (Fuzz fuzz))
+                       sphere center 0.2 (Metal (ConstantColor alb) (Fuzz fuzz))
                 | otherwise --Glass
                  ->
                   return $
-                  Just $ Sphere center 0.2 (Dielectric (RefractiveIdx 1.5))
+                  Just $ sphere center 0.2 (Dielectric (RefractiveIdx 1.5))
