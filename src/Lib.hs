@@ -442,6 +442,8 @@ data Hittable
   | BVHNode Hittable -- | bvh_left
             Hittable -- | bvh_right
             Box      -- | bvh_box
+  | Translate Hittable  -- | the translated Hittable
+              Vec3      -- | translation offset
   deriving (Show)
 
 sphere :: Vec3 -> Double -> Material -> Hittable
@@ -585,7 +587,7 @@ schlick cosine ref_idx =
       r1 = r0 * r0
    in r1 + (1.0 - r1) * (1 - cosine) ** 5
 
-boundingBox :: Hittable -> Double -> Double -> Box
+boundingBox :: Hittable -> Time -> Time -> Box
 boundingBox (Sphere c r _) _ _ =
   let rad = Vec3 (r, r, r)
    in Box (c `vecSub` rad) (c `vecAdd` rad)
@@ -602,6 +604,9 @@ boundingBox (Rect (YZRect y0 y1 z0 z1 k _)) _ _ =
   Box (Vec3 (k - epsilon, y0, z0)) (Vec3 (k + epsilon, y1, z1))
 boundingBox (BVHNode _ _ box) _ _ = box
 boundingBox (Cuboid c_min c_max _) _ _ = Box c_min c_max
+boundingBox (Translate h offset) time0 time1 =
+  let (Box b_min b_max) = boundingBox h time0 time1
+   in Box (b_min `vecAdd` offset) (b_max `vecAdd` offset)
 
 surroundingBox :: Box -> Box -> Box
 surroundingBox (Box b0min b0max) (Box b1min b1max) =
@@ -684,16 +689,18 @@ hit (Rect rect) r@(Ray ror rdr _) t_min t_max =
                    else let rec_u = (i - i0) / (i1 - i0)
                             rec_v = (j - j0) / (j1 - j0)
                             p = r `at` t
-                            frontFace = dot rdr outwardNormal < 0.0
-                            normal =
-                              if frontFace
-                                then outwardNormal
-                                else vecNegate outwardNormal
+                            (frontFace, normal) = faceNormal r outwardNormal
                          in Just $
                             Hit t p normal rec_u rec_v frontFace mat
       where
         t = (k - vecK ror) / vecK rdr
-
+hit (Translate h offset) (Ray ror rdr tm) t_min t_max =
+  let m_r = Ray (ror `vecSub` offset) rdr tm
+   in case hit h m_r t_min t_max of
+        Nothing -> Nothing
+        Just (Hit t p outwardNormal rec_u rec_v _ mat) ->
+          let (mFrontFace, mNormal) = faceNormal m_r outwardNormal
+          in Just (Hit t (p `vecAdd` offset) mNormal rec_u rec_v mFrontFace mat)
 hit sph r@(Ray ror rdr tm) t_min t_max =
   let sc = sphCenter sph tm
       sr = sphRadius sph
@@ -713,19 +720,23 @@ hit sph r@(Ray ror rdr tm) t_min t_max =
                     | otherwise -> Nothing
         else Nothing
 
+faceNormal :: Ray -> Vec3 -> (Bool, Vec3)
+faceNormal (Ray _ rdr _) outwardNormal =
+  let frontFace = rdr `dot` outwardNormal < 0
+   in ( frontFace
+      , if frontFace
+          then outwardNormal
+          else vecNegate outwardNormal)
+
 recHit :: Double -> Ray -> Hittable -> Hit
-recHit temp r@(Ray _ dr tm) sph =
+recHit temp r@(Ray _ _ tm) sph =
   let sc = sphCenter sph tm
       sr = sphRadius sph
       sm = sphMaterial sph
       p = r `at` temp
       pShift = p `vecSub` sc
       outwardNormal = divide pShift sr
-      frontFace = dot dr outwardNormal < 0.0
-      normal =
-        if frontFace
-          then outwardNormal
-          else vecNegate outwardNormal
+      (frontFace, normal) = faceNormal r outwardNormal
       (u, v) = let phi = atan2 (vecZ outwardNormal) (vecX outwardNormal)
                    theta = asin (vecY outwardNormal)
         in (1.0 - ((phi + pi) / (2 * pi)), (theta + (pi / 2)) / pi)
@@ -996,13 +1007,15 @@ makeCornellBoxScene t0 t1 gen = runST $ do
         t0
         t1
         (   yzRect 0 555 0 555 555 green
-        :<| yzRect 0 555 0 555 0 red
+        :<| yzRect 0 555 0 555 0   red
         :<| xzRect 213 343 227 332 554 light
-        :<| xzRect 0 555 0 555 0 white
-        :<| xzRect 0 555 0 555 555 white
+        :<| xzRect 0   555 0   555 0   white
+        :<| xzRect 0   555 0   555 555 white
         :<| xyRect 0 555 0 555 555 white
         :<| cuboid (Vec3 (130, 0, 65)) (Vec3 (295, 165, 230)) white
-        :<| cuboid (Vec3 (265, 0, 295)) (Vec3 (430, 330, 460)) white
+        :<| Translate
+              (cuboid (Vec3 (265, 0, 295)) (Vec3 (430, 330, 460)) white)
+              (Vec3 (0, 20, 0))
         :<| Empty
         )
     )
@@ -1039,7 +1052,7 @@ makeSimpleLightScene t0 t1 gen =
 --               :<| Sphere (Vec3 (0, 2, 0)) 2 (Lambertian (ConstantColor $ albedo (0.5, 0.0, 0.3)))
                :<| sphere (Vec3 (0, 2, 0)) 2 (Lambertian perText)
                :<| sphere (Vec3 (0, 7, 0)) 2 difflight
-               :<| (xyRect 3 5 1 3 (-2) difflight)
+               :<| xyRect 3 5 1 3 (-2) difflight
                :<| Empty))
         (dummyRenderEnv gRef)
     g1 <- readSTRef gRef
