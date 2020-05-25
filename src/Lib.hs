@@ -5,7 +5,9 @@ module Lib
     ( cornellCamera
     , earthTexture
     , makeCornellBoxScene
+    , makeCornellSmokeBoxScene
     , makeEarthScene
+    , makeNextWeekFinalScene
     , makeRandomScene
     , makeSimpleLightScene
     , makeTwoPerlinSpheresScene
@@ -570,8 +572,8 @@ unRotatePoint axis sin_theta cos_theta (Vec3 (pX, pY, pZ)) =
         (cos_theta * pX + sin_theta * pY, -sin_theta * pX + cos_theta * pY, pZ)
 
 constantMedium :: Double -> Texture -> Hittable -> Hittable
-constantMedium density tex boundary =
-  ConstantMedium (-1 / density) (Isotropic tex) boundary
+constantMedium density tex =
+  ConstantMedium (-1 / density) (Isotropic tex)
 
 data Box = Box
   { box_min :: Vec3
@@ -816,6 +818,32 @@ hit (Rotate axis sin_theta cos_theta _ h) (Ray ror rdr tm) t_min t_max gen =
               (rot_frontFace, rot_normal) =
                 faceNormal rotated_r rot_outwardNormal
            in (Just (Hit t rot_p rot_normal u v rot_frontFace mat), g1)
+hit (ConstantMedium nInvD phFunc boundary) ray@(Ray _ rdr _) t_min t_max gen
+  = case hit boundary ray (-infinity) infinity gen of
+    n@(Nothing, _) -> n
+    (Just (Hit h1t _ _ _ _ _ _), g1) ->
+      case hit boundary ray (h1t + epsilon) infinity g1 of
+        n@(Nothing, _) -> n
+        (Just (Hit h2t _ _ _ _ _ _), g2) ->
+          let rec1t' = max t_min h1t
+              rec2t  = min t_max h2t
+          in  if rec1t' >= rec2t
+                then (Nothing, g2)
+                else
+                  let rec1t           = if rec1t' < 0 then 0 else rec1t'
+                      rayLength       = Lib.length rdr
+                      distInsideBound = (rec2t - rec1t) * rayLength
+                      (rand, g3)      = randomDouble g2
+                      hitDist         = nInvD * log rand
+                  in  if hitDist > distInsideBound
+                        then (Nothing, g3)
+                        else
+                          let newt = rec1t + (hitDist / rayLength)
+                              newp = ray `at` newt
+                          in  ( Just
+                                $ Hit newt newp (Vec3 (1, 0, 0)) 0 0 True phFunc
+                              , g3
+                              )
 hit sph r@(Ray ror rdr tm) t_min t_max gen =
   let sc = sphCenter sph tm
       sr = sphRadius sph
@@ -1130,12 +1158,55 @@ makeCornellBoxScene t0 t1 gen = runST $ do
         :<| rect XZPlane 0   555 0   555 0   white
         :<| rect XZPlane 0   555 0   555 555 white
         :<| rect XYPlane 0   555 0   555 555 white
-        :<| (translate (Vec3 (265, 0, 295)) $ rotate YAxis 15
-              (cuboid (Vec3 (0, 0, 0)) (Vec3 (165, 330, 165)) white))
-        :<| (translate (Vec3 (130, 0, 65)) $
-             rotate YAxis (-18) $
-             rotate ZAxis 30
-              (cuboid (Vec3 (0, 0, 0)) (Vec3 (165, 165, 165)) white))
+        :<| translate
+              (Vec3 (265, 0, 295))
+              (rotate YAxis
+                      15
+                      (cuboid (Vec3 (0, 0, 0)) (Vec3 (165, 330, 165)) white)
+              )
+        :<| translate
+              (Vec3 (130, 0, 65))
+              ( rotate YAxis (-18)
+              $ rotate
+                  ZAxis
+                  30
+                  (cuboid (Vec3 (0, 0, 0)) (Vec3 (165, 165, 165)) white)
+              )
+        :<| Empty
+        )
+    )
+    (dummyRenderEnv gRef)
+  g1 <- readSTRef gRef
+  return ((world, albedo (0.0, 0.0, 0.0)), g1)
+
+makeCornellSmokeBoxScene :: Time -> Time -> RandGen -> (Scene, RandGen)
+makeCornellSmokeBoxScene t0 t1 gen = runST $ do
+  gRef  <- newSTRef gen
+  world <- runReaderT
+    (do
+      let red   = Lambertian $ ConstantColor (albedo (0.65, 0.05, 0.05))
+      let white = Lambertian $ ConstantColor (albedo (0.73, 0.73, 0.73))
+      let green = Lambertian $ ConstantColor (albedo (0.12, 0.45, 0.15))
+      let light = DiffuseLight $ ConstantColor (albedo (7, 7, 7))
+      makeBVH
+        (Just (t0, t1))
+        (   rect YZPlane 0   555 0   555 555 green
+        :<| rect YZPlane 0   555 0   555 0   red
+        :<| rect XZPlane 113 443 127 432 554 light
+        :<| rect XZPlane 0   555 0   555 0   white
+        :<| rect XZPlane 0   555 0   555 555 white
+        :<| rect XYPlane 0   555 0   555 555 white
+        :<| constantMedium 0.01 (ConstantColor (albedo (0, 0, 0)))
+              (translate (Vec3 (265, 0, 295))
+                (rotate YAxis 15
+                  (cuboid (Vec3 (0, 0, 0)) (Vec3 (165, 330, 165)) white)
+                )
+              )
+        :<| constantMedium 0.01 (ConstantColor (albedo (1, 1, 1)))
+              (translate (Vec3 (130, 0, 65))
+                (rotate YAxis (-18) (cuboid (Vec3 (0, 0, 0)) (Vec3 (165, 165, 165)) white)
+                )
+              )
         :<| Empty
         )
     )
@@ -1344,3 +1415,49 @@ makeRandomScene earthtex _ _ gen =
                  ->
                   return $
                   Just $ sphere center 0.2 (Dielectric (RefractiveIdx 1.5))
+
+makeNextWeekFinalScene :: Texture -> Time -> Time -> RandGen -> (Scene, RandGen)
+makeNextWeekFinalScene earthtex t0 t1 gen =
+  runST $ do
+    gRef <- newSTRef gen
+    world <- runReaderT makeSceneM (dummyRenderEnv gRef)
+    g1 <- readSTRef gRef
+    return ((world, albedo (0, 0, 0)), g1)
+  where
+    makeSceneM :: RandomState s Hittable
+    makeSceneM = do
+      let ground = Lambertian (ConstantColor $ albedo (0.48, 0.83, 0.53))
+      let white = Lambertian $ ConstantColor (albedo (0.73, 0.73, 0.73))
+      let w = 100 :: Double
+      let y0 = 0 :: Double
+      boxes1 <- (makeBVH (Just (0, 1))) =<< S.fromList <$>
+        mapM
+          (\(i, j) -> do
+             let x0 = i * w - 1000
+             let z0 = j * w - 1000
+             let x1 = x0 + w
+             y1 <- randomDoubleRM 1 101
+             let z1 = z0 + w
+             return $ cuboid (Vec3 (x0, y0, z0)) (Vec3 (x1, y1, z1)) ground)
+          [(i, j) | i <- [0 .. 19], j <- [0 .. 19]]
+      let light = DiffuseLight $ ConstantColor (albedo (7, 7, 7))
+      let boundary1 = sphere (Vec3 (360, 150, 145)) 70 (Dielectric $ RefractiveIdx 1.5)
+      let boundary2 = sphere (Vec3 (0, 0, 0)) 5000 (Dielectric $ RefractiveIdx 1.5)
+      pertext <- makePerlin 0.1
+      boxes2 <- makeBVH (Just (0, 1)) =<< S.fromList <$>
+        replicateM 1000 (do randP <- randomVec3DoubleRM 0 165
+                            return $ sphere randP 10 white)
+      makeBVH
+        (Just (t0, t1))
+        (   boxes1
+        :<| rect XZPlane 113 443 127 432 554 light
+        :<| movingSphere (Vec3 (400, 400, 200)) (Vec3 (430, 400, 200)) t0 t1 50 (Lambertian (ConstantColor $ albedo (0.7, 0.3, 0.1)))
+        :<| sphere (Vec3 (260, 150, 45)) 50 (Dielectric $ RefractiveIdx 1.5)
+        :<| sphere (Vec3 (0, 150, 145)) 50 (Metal (ConstantColor $ albedo (0.8, 0.8, 0.9)) (Fuzz 10.0))
+        :<| boundary1
+        :<| constantMedium 0.2 (ConstantColor $ albedo (0.2,0.4,0.9)) boundary1
+        :<| constantMedium 0.0001 (ConstantColor $ albedo (1,1,1)) boundary2
+        :<| sphere (Vec3 (400, 200, 400)) 100 (Lambertian earthtex)
+        :<| sphere (Vec3 (220, 280, 300)) 80 (Lambertian pertext)
+        :<| translate (Vec3 (-100, 270, 395)) (rotate YAxis 15 boxes2)
+        :<| Empty)
