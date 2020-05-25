@@ -14,6 +14,7 @@ module Lib
     , makeTwoSpheresScene
     , mkRenderStaticEnv
     , newRandGen
+    , nextWeekFinalSceneCamera
     , printRow
     , randGen
     , randomSceneCamera
@@ -1415,6 +1416,19 @@ makeRandomScene earthtex _ _ gen =
                  ->
                   return $
                   Just $ sphere center 0.2 (Dielectric (RefractiveIdx 1.5))
+
+nextWeekFinalSceneCamera :: (Int, Int) -> Camera
+nextWeekFinalSceneCamera (imageWidth, imageHeight) =
+  newCamera
+    (Vec3 (575, 278, -525))
+    (Vec3 (320, 278, 0.0))
+    (Vec3 (0.0, 1.0, 0.0))
+    40.0
+    (fromIntegral imageWidth / fromIntegral imageHeight)
+    0.1
+    10.0
+    0.0
+    1.0
 
 makeNextWeekFinalScene :: Texture -> Time -> Time -> RandGen -> (Scene, RandGen)
 makeNextWeekFinalScene earthtex t0 t1 gen =
