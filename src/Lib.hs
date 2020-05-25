@@ -412,7 +412,7 @@ turb ptex p depth =
           [1 .. depth]
    in abs accum
 
-textureValue :: Texture -> Double -> Double -> Vec3 -> Albedo
+textureValue :: Texture -> Double -> Double -> Point3 -> Albedo
 textureValue (ConstantColor color) _ _ _ = color
 textureValue (CheckerTexture oddTex evenTex) u v p =
   if sin (10 * vecX p) * sin (10 * vecY p) * sin (10 * vecZ p) < 0
@@ -428,7 +428,7 @@ textureValue (ImageTexture (Just im) nx ny) u v _ =
    in colorToAlbedo $ pixelAt im i j
 textureValue (ImageTexture Nothing _ _) _ _ _ = albedo (0, 1, 1)
 
-marbleTexture :: Texture -> Vec3 -> Double
+marbleTexture :: Texture -> Point3 -> Double
 marbleTexture ptex p = 0.5 * (1.0 + sin (vecZ p + 10 * turb ptex p 7))
 
 data Axis = XAxis | YAxis | ZAxis
@@ -579,8 +579,8 @@ constantMedium density tex =
   ConstantMedium (-1 / density) (Isotropic tex)
 
 data Box = Box
-  { box_min :: Vec3
-  , box_max :: Vec3
+  { box_min :: Point3
+  , box_max :: Point3
   } deriving (Show)
 
 boxRayIntersect :: Box -> Ray -> Double -> Double -> Bool
@@ -600,7 +600,7 @@ boxRayIntersect (Box bb_min bb_max) (Ray ror rdr _) t_min t_max = all
 
 type Time = Double
 
-sphCenter :: Hittable -> Double -> Vec3
+sphCenter :: Hittable -> Double -> Point3
 sphCenter (Sphere c _ _) _ = c
 sphCenter (MovingSphere c0 c1 t0 t1 _ _) t =
   c0 `vecAdd` scale ((t - t0) / (t1 - t0)) (c1 `vecSub` c0)
@@ -654,7 +654,7 @@ scatter (Isotropic tex) (Ray _ _ rtime) (Hit _ hp _ hu hv _ _) = do
   let attenuation = textureValue tex hu hv hp
   return $ Just (scattered, attenuation)
 
-emitted :: Material -> Double -> Double -> Vec3 -> Albedo
+emitted :: Material -> Double -> Double -> Point3 -> Albedo
 emitted (DiffuseLight tex) u v p = textureValue tex u v p
 emitted _ _ _ _                  = albedo (0, 0, 0)
 
@@ -686,11 +686,11 @@ boundingBox (MovingSphere c0 c1 _ _ r _) _ =
       box1 = Box (c1 `vecSub` rad) (c1 `vecAdd` rad)
    in surroundingBox box0 box1
 boundingBox (Rect (XYRect x0 x1 y0 y1 k _)) _ =
-  Box (Vec3 (x0, y0, k - epsilon)) (Vec3 (x1, y1, k + epsilon))
+  Box (point3 (x0, y0, k - epsilon)) (point3 (x1, y1, k + epsilon))
 boundingBox (Rect (XZRect x0 x1 z0 z1 k _)) _ =
-  Box (Vec3 (x0, k - epsilon, z0)) (Vec3 (x1, k + epsilon, z1))
+  Box (point3 (x0, k - epsilon, z0)) (point3 (x1, k + epsilon, z1))
 boundingBox (Rect (YZRect y0 y1 z0 z1 k _)) _ =
-  Box (Vec3 (k - epsilon, y0, z0)) (Vec3 (k + epsilon, y1, z1))
+  Box (point3 (k - epsilon, y0, z0)) (point3 (k + epsilon, y1, z1))
 boundingBox (BVHNode _ _ box) _ = box
 boundingBox (Cuboid c_min c_max _) _ = Box c_min c_max
 boundingBox (Translate offset h) mtime =
@@ -706,8 +706,9 @@ surroundingBox (Box b0min b0max) (Box b1min b1max) =
       (Vec3 (b1min_x, b1min_y, b1min_z)) = b1min
       (Vec3 (b1max_x, b1max_y, b1max_z)) = b1max
       small =
-        Vec3 (min b0min_x b1min_x, min b0min_y b1min_y, min b0min_z b1min_z)
-      big = Vec3 (max b0max_x b1max_x, max b0max_y b1max_y, max b0max_z b1max_z)
+        point3 (min b0min_x b1min_x, min b0min_y b1min_y, min b0min_z b1min_z)
+      big =
+        point3 (max b0max_x b1max_x, max b0max_y b1max_y, max b0max_z b1max_z)
    in Box small big
 
 makeBVH :: Maybe (Time, Time) -> Seq Hittable -> RandomState s Hittable
@@ -776,11 +777,11 @@ hit (Cuboid _ _ rl) r t_min t_max gen =
 hit (Rect rct) r@(Ray ror rdr _) t_min t_max gen =
   case rct of
     (XYRect x0 x1 y0 y1 k rmat) ->
-      (rectHit x0 x1 y0 y1 vecX vecY vecZ (Vec3 (0, 0, 1)) k rmat, gen)
+      (rectHit x0 x1 y0 y1 vecX vecY vecZ (point3 (0, 0, 1)) k rmat, gen)
     (XZRect x0 x1 z0 z1 k rmat) ->
-      (rectHit x0 x1 z0 z1 vecX vecZ vecY (Vec3 (0, 1, 0)) k rmat, gen)
+      (rectHit x0 x1 z0 z1 vecX vecZ vecY (point3 (0, 1, 0)) k rmat, gen)
     (YZRect y0 y1 z0 z1 k rmat) ->
-      (rectHit y0 y1 z0 z1 vecY vecZ vecX (Vec3 (1, 0, 0)) k rmat, gen)
+      (rectHit y0 y1 z0 z1 vecY vecZ vecX (point3 (1, 0, 0)) k rmat, gen)
   where
     rectHit i0 i1 j0 j1 vecI vecJ vecK outwardNormal k mat =
       if (t < t_min) || (t > t_max)
@@ -866,7 +867,7 @@ hit sph r@(Ray ror rdr tm) t_min t_max gen =
                     | otherwise -> (Nothing, gen)
         else (Nothing, gen)
 
-faceNormal :: Ray -> Vec3 -> (Bool, Vec3)
+faceNormal :: Ray -> Point3 -> (Bool, Point3)
 faceNormal (Ray _ rdr _) outwardNormal =
   let frontFace = rdr `dot` outwardNormal < 0
    in ( frontFace
