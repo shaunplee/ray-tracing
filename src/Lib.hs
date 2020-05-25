@@ -290,6 +290,7 @@ data Material
   | Metal Texture Fuzz
   | Dielectric RefractiveIdx
   | DiffuseLight Texture
+  | Isotropic Texture
   deriving Show
 
 newtype Fuzz = Fuzz Double
@@ -448,13 +449,16 @@ data Hittable
   | BVHNode Hittable -- | bvh_left
             Hittable -- | bvh_right
             Box      -- | bvh_box
-  | Translate Hittable  -- | the translated Hittable
-              Vec3      -- | translation offset
-  | Rotate Hittable -- | the rotated Hittable
-           Axis     -- | the axis of rotation
+  | Translate Vec3      -- | translation offset
+              Hittable  -- | the translated Hittable
+  | Rotate Axis     -- | the axis of rotation
            Double   -- | sin theta
            Double   -- | cos theta
            Box      -- | the BoundingBox
+           Hittable -- | the rotated Hittable
+  | ConstantMedium Double   -- | negative inverse density of the constant medium
+                   Material -- | material of the constant medium
+                   Hittable -- | the shape of the constant medium
   deriving (Show)
 
 sphere :: Vec3 -> Double -> Material -> Hittable
@@ -510,13 +514,13 @@ rect XZPlane x0 x1 z0 z1 k mat = Rect $ XZRect x0 x1 z0 z1 k mat
 rect YZPlane y0 y1 z0 z1 k mat = Rect $ YZRect y0 y1 z0 z1 k mat
 
 translate :: XYZ -> Hittable -> Hittable
-translate = flip Translate
+translate = Translate
 
 degreesToRadians :: Double -> Double
 degreesToRadians angle = angle * pi / 180.0
 
 rotate :: Axis -> Double -> Hittable -> Hittable
-rotate axis angle h = Rotate h axis sin_theta cos_theta (Box h_min h_max)
+rotate axis angle h = Rotate axis sin_theta cos_theta (Box h_min h_max) h
   where
     rad = degreesToRadians angle
     sin_theta = sin rad
@@ -564,6 +568,10 @@ unRotatePoint axis sin_theta cos_theta (Vec3 (pX, pY, pZ)) =
     ZAxis ->
       Vec3
         (cos_theta * pX + sin_theta * pY, -sin_theta * pX + cos_theta * pY, pZ)
+
+constantMedium :: Double -> Texture -> Hittable -> Hittable
+constantMedium density tex boundary =
+  ConstantMedium (-1 / density) (Isotropic tex) boundary
 
 data Box = Box
   { box_min :: Vec3
@@ -635,6 +643,11 @@ scatter (Dielectric (RefractiveIdx ref_idx)) (Ray _ rdr rtime) (Hit _ hp hn _ _ 
       else let refracted = refract unitDirection hn etaiOverEtat
             in Just (Ray hp refracted rtime, alb)
 scatter DiffuseLight {} _ _  = return Nothing
+scatter (Isotropic tex) (Ray _ _ rtime) (Hit _ hp _ hu hv _ _) = do
+  randDr <- randomInUnitSphereM
+  let scattered = Ray hp randDr rtime
+  let attenuation = textureValue tex hu hv hp
+  return $ Just (scattered, attenuation)
 
 emitted :: Material -> Double -> Double -> Vec3 -> Albedo
 emitted (DiffuseLight tex) u v p = textureValue tex u v p
@@ -675,10 +688,11 @@ boundingBox (Rect (YZRect y0 y1 z0 z1 k _)) _ =
   Box (Vec3 (k - epsilon, y0, z0)) (Vec3 (k + epsilon, y1, z1))
 boundingBox (BVHNode _ _ box) _ = box
 boundingBox (Cuboid c_min c_max _) _ = Box c_min c_max
-boundingBox (Translate h offset) mtime =
+boundingBox (Translate offset h) mtime =
   let (Box b_min b_max) = boundingBox h mtime
    in Box (b_min `vecAdd` offset) (b_max `vecAdd` offset)
-boundingBox (Rotate _ _ _ _ box) _ = box
+boundingBox (Rotate _ _ _ box _) _ = box
+boundingBox (ConstantMedium _ _ h) mt = boundingBox h mt
 
 surroundingBox :: Box -> Box -> Box
 surroundingBox (Box b0min b0max) (Box b1min b1max) =
