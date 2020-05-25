@@ -112,9 +112,9 @@ mkRenderEnv renderStaticEnv g =
 dummyCamera :: Camera
 dummyCamera =
   newCamera
-    (Vec3 (13.0, 2.0, 3.0))
-    (Vec3 (0.0, 0.0, 0.0))
-    (Vec3 (0.0, 1.0, 0.0))
+    (point3 (13.0, 2.0, 3.0))
+    (point3 (0.0, 0.0, 0.0))
+    (point3 (0.0, 1.0, 0.0))
     20.0
     (4 / 3)
     0.1
@@ -126,7 +126,7 @@ dummyRenderStaticEnv :: RenderStaticEnv
 dummyRenderStaticEnv =
   let world =
         ( Sphere
-            (Vec3 (0, 0, 0))
+            (point3 (0, 0, 0))
             1.0
             (Lambertian $ ConstantColor $ albedo (0, 1.0, 1.0))
         , albedo (0, 0, 0))
@@ -179,7 +179,10 @@ instance Show RGB where
   show (RGB (r, g, b)) = unwords [show r, show g, show b]
 
 -- General 3-dimensional Doubles--could be color or vector or position
-type XYZ = Vec3
+type Point3 = Vec3
+
+point3 :: (Double, Double, Double) -> Point3
+point3 = Vec3
 
 newtype Vec3 = Vec3 (Double, Double, Double)
 
@@ -256,9 +259,8 @@ albedoToColor (Albedo (Vec3 (x, y, z))) =
 
 colorToAlbedo :: RGB -> Albedo
 colorToAlbedo (RGB (r, g, b)) =
-  Albedo
-    (Vec3
-       (fromIntegral r / 255.0, fromIntegral g / 255.0, fromIntegral b / 255.0))
+  albedo
+    (fromIntegral r / 255.0, fromIntegral g / 255.0, fromIntegral b / 255.0)
 
 printRow :: Handle -> Int -> (Int, [RGB]) -> IO ()
 printRow handle imageHeight (i, row) = do
@@ -269,18 +271,18 @@ showRow :: [RGB] -> String
 showRow row = unwords $ fmap show row
 
 data Ray =
-  Ray XYZ -- | ray_origin
-      XYZ -- | ray_direction
+  Ray Point3 -- | ray_origin
+      Point3 -- | ray_direction
       Double -- | ray_time
   deriving (Show)
 
-at :: Ray -> Double -> XYZ
+at :: Ray -> Double -> Point3
 at (Ray orn dr _) t = orn `vecAdd` scale t dr
 
 data Hit
   = Hit Double   -- | hit_t
-        XYZ      -- | hit_p
-        XYZ      -- | hit_normal - vector normal to the surface of the object
+        Point3      -- | hit_p
+        Point3      -- | hit_normal - vector normal to the surface of the object
                  -- at the point of the hit
         Double   -- | hit_u
         Double   -- | hit_v
@@ -436,23 +438,23 @@ data Plane = XYPlane | XZPlane | YZPlane
   deriving Show
 
 data Hittable
-  = Sphere Vec3     -- | sphere_center
+  = Sphere Point3     -- | sphere_center
            Double   -- | sphere_radius
            Material -- | sphere_material
-  | MovingSphere Vec3     -- | msphere_center0
-                 Vec3     -- | msphere_center1
+  | MovingSphere Point3     -- | msphere_center0
+                 Point3     -- | msphere_center1
                  Time     -- | msphere_time0
                  Time     -- | msphere_time1
                  Double   -- | msphere_radius
                  Material -- | msphere_material
   | Rect Rectangle
-  | Cuboid Vec3 -- | box min
-           Vec3 -- | box max
+  | Cuboid Point3 -- | box min
+           Point3 -- | box max
            [Rectangle] -- | Rects of the six sides of the box
   | BVHNode Hittable -- | bvh_left
             Hittable -- | bvh_right
             Box      -- | bvh_box
-  | Translate Vec3      -- | translation offset
+  | Translate Point3      -- | translation offset
               Hittable  -- | the translated Hittable
   | Rotate Axis     -- | the axis of rotation
            Double   -- | sin theta
@@ -464,13 +466,13 @@ data Hittable
                    Hittable -- | the shape of the constant medium
   deriving (Show)
 
-sphere :: Vec3 -> Double -> Material -> Hittable
+sphere :: Point3 -> Double -> Material -> Hittable
 sphere = Sphere
 
-movingSphere :: Vec3 -> Vec3 -> Time -> Time -> Double -> Material -> Hittable
+movingSphere :: Point3 -> Point3 -> Time -> Time -> Double -> Material -> Hittable
 movingSphere = MovingSphere
 
-cuboid :: Vec3 -> Vec3 -> Material -> Hittable
+cuboid :: Point3 -> Point3 -> Material -> Hittable
 cuboid bmin@(Vec3 (x0, y0, z0)) bmax@(Vec3 (x1, y1, z1)) mat = Cuboid
   bmin
   bmax
@@ -516,7 +518,7 @@ rect XYPlane x0 x1 y0 y1 k mat = Rect $ XYRect x0 x1 y0 y1 k mat
 rect XZPlane x0 x1 z0 z1 k mat = Rect $ XZRect x0 x1 z0 z1 k mat
 rect YZPlane y0 y1 z0 z1 k mat = Rect $ YZRect y0 y1 z0 z1 k mat
 
-translate :: XYZ -> Hittable -> Hittable
+translate :: Point3 -> Hittable -> Hittable
 translate = Translate
 
 degreesToRadians :: Double -> Double
@@ -530,7 +532,7 @@ rotate axis angle h = Rotate axis sin_theta cos_theta (Box h_min h_max) h
     cos_theta = cos rad
     (Box (Vec3 (bbMinX, bbMinY, bbMinZ)) (Vec3 (bbMaxX, bbMaxY, bbMaxZ))) =
       boundingBox h Nothing
-    updateMinMax :: XYZ -> (XYZ, XYZ) -> (XYZ, XYZ)
+    updateMinMax :: Point3 -> (Point3, Point3) -> (Point3, Point3)
     updateMinMax (Vec3 (i, j, k)) (Vec3 (minX, minY, minZ), Vec3 (maxX, maxY, maxZ)) =
       let x = i * bbMaxX + (1 - i) * bbMinX
           y = j * bbMaxY + (1 - j) * bbMinY
@@ -546,7 +548,7 @@ rotate axis angle h = Rotate axis sin_theta cos_theta (Box h_min h_max) h
         , Vec3 (-infinity, -infinity, -infinity))
         ([Vec3 (i, j, k) | i <- [0, 1, 2], j <- [0, 1, 2], k <- [0, 1, 2]])
 
-rotatePoint :: Axis -> Double -> Double -> XYZ -> XYZ
+rotatePoint :: Axis -> Double -> Double -> Point3 -> Point3
 rotatePoint axis sin_theta cos_theta (Vec3 (pX, pY, pZ)) =
   case axis of
     XAxis ->
@@ -559,7 +561,7 @@ rotatePoint axis sin_theta cos_theta (Vec3 (pX, pY, pZ)) =
       Vec3
         (cos_theta * pX - sin_theta * pY, sin_theta * pX + cos_theta * pY, pZ)
 
-unRotatePoint :: Axis -> Double -> Double -> XYZ -> XYZ
+unRotatePoint :: Axis -> Double -> Double -> Point3 -> Point3
 unRotatePoint axis sin_theta cos_theta (Vec3 (pX, pY, pZ)) =
   case axis of
     XAxis ->
@@ -656,10 +658,10 @@ emitted :: Material -> Double -> Double -> Vec3 -> Albedo
 emitted (DiffuseLight tex) u v p = textureValue tex u v p
 emitted _ _ _ _                  = albedo (0, 0, 0)
 
-reflect :: XYZ -> XYZ -> XYZ
+reflect :: Point3 -> Point3 -> Point3
 reflect v n = v `vecSub` scale (2.0 * dot v n) n
 
-refract :: XYZ -> XYZ -> Double -> XYZ
+refract :: Point3 -> Point3 -> Double -> Point3
 refract v n etaiOverEtat =
   let uv = makeUnitVector v
       cosTheta = dot (vecNegate uv) n
@@ -971,7 +973,7 @@ randomUnitVectorM = do
   lift $ writeSTRef gRef g2
   return $ Vec3 (r * cos a, r * sin a, z)
 
-_randomInHemisphereM :: XYZ -> RandomState s Vec3
+_randomInHemisphereM :: Point3 -> RandomState s Vec3
 _randomInHemisphereM n = do
   inUnitSphere <- randomInUnitSphereM
   if (inUnitSphere `dot` n) > 0.0
@@ -979,13 +981,13 @@ _randomInHemisphereM n = do
     else return (vecNegate inUnitSphere)
 
 data Camera = Camera
-  XYZ    -- |  camera_origin
-  XYZ    -- |  camera_llc
-  XYZ    -- |  camera_horiz
-  XYZ    -- |  camera_vert
-  XYZ    -- |  camera_u
-  XYZ    -- |  camera_v
-  XYZ    -- |  _camera_w
+  Point3    -- |  camera_origin
+  Point3    -- |  camera_llc
+  Point3    -- |  camera_horiz
+  Point3    -- |  camera_vert
+  Point3    -- |  camera_u
+  Point3    -- |  camera_v
+  Point3    -- |  _camera_w
   Double -- |  camera_lensRadius
   Double -- |  camera_t0
   Double -- |  camera_t1
@@ -1007,9 +1009,9 @@ getRay (Camera c_or c_llc c_horiz c_vert c_u c_v _ c_lr c_time0 c_time1) s t =
       tm
 
 newCamera ::
-     XYZ
-  -> XYZ
-  -> XYZ
+     Point3
+  -> Point3
+  -> Point3
   -> Double
   -> Double
   -> Double
@@ -1426,7 +1428,7 @@ nextWeekFinalSceneCamera (imageWidth, imageHeight) =
     40.0
     (fromIntegral imageWidth / fromIntegral imageHeight)
     0.1
-    10.0
+    580.0
     0.0
     1.0
 
