@@ -734,36 +734,48 @@ boxCompare compAxis mtime boxa boxb =
       (Box bmB _) = boundingBox boxb mtime
    in compare (compAxis bmA) (compAxis bmB)
 
-hit :: Hittable -> Ray -> Double -> Double -> Maybe Hit
-hit (BVHNode bvh_l bvh_r box) r t_min t_max =
+hit :: Hittable -> Ray -> Double -> Double -> RandGen -> (Maybe Hit, RandGen)
+hit (BVHNode bvh_l bvh_r box) r t_min t_max gen =
   if boxRayIntersect box r t_min t_max
-    then case hit bvh_l r t_min t_max -- try to hit left branch
+     -- try to hit left branch
+    then case hit bvh_l r t_min t_max gen
+           -- no hits, try right branch
                of
-           Nothing -> hit bvh_r r t_min t_max -- no hits, try right branch
-           Just hitLeft@(Hit t _ _ _ _ _ _) -- left branch hit
+           (Nothing, g1) -> hit bvh_r r t_min t_max g1
+            -- left branch hit
+           (Just hitLeft@(Hit t _ _ _ _ _ _), g1)
+             -- is there a closer right branch hit?
             ->
-             case hit bvh_r r t_min t -- is there a closer right branch hit?
+             case hit bvh_r r t_min t g1
+                -- no, take hit from left branch
                    of
-               Nothing       -> Just hitLeft -- no, take hit from left branch
-               Just hitRight -> Just hitRight -- yes, take hit from right branch
-    else Nothing
-hit (Cuboid _ _ rl) r t_min t_max =
-  foldr1 closerHit (map (\h -> hit (Rect h) r t_min t_max) rl)
+               (Nothing, g2)       -> (Just hitLeft, g2)
+                -- yes, take hit from right branch
+               (Just hitRight, g2) -> (Just hitRight, g2)
+    else (Nothing, gen)
+hit (Cuboid _ _ rl) r t_min t_max gen =
+  foldr
+    (\h acc@(_, g) -> closerHit (hit (Rect h) r t_min t_max g) acc)
+    (Nothing, gen)
+    rl
   where
-    closerHit :: Maybe Hit -> Maybe Hit -> Maybe Hit
-    closerHit Nothing Nothing = Nothing
-    closerHit (Just h1) Nothing = Just h1
-    closerHit Nothing (Just h2) = Just h2
-    closerHit h1@(Just (Hit t1 _ _ _ _ _ _)) h2@(Just (Hit t2 _ _ _ _ _ _)) =
-      if t1 < t2 then h1 else h2
-hit (Rect rct) r@(Ray ror rdr _) t_min t_max =
+    closerHit ::
+         (Maybe Hit, RandGen) -> (Maybe Hit, RandGen) -> (Maybe Hit, RandGen)
+    closerHit (Nothing, rg) (Nothing, _) = (Nothing, rg)
+    closerHit (Just h1, rg) (Nothing, _) = (Just h1, rg)
+    closerHit (Nothing, rg) (Just h2, _) = (Just h2, rg)
+    closerHit (h1@(Just (Hit t1 _ _ _ _ _ _)), rg) (h2@(Just (Hit t2 _ _ _ _ _ _)), _) =
+      if t1 < t2
+        then (h1, rg)
+        else (h2, rg)
+hit (Rect rct) r@(Ray ror rdr _) t_min t_max gen =
   case rct of
     (XYRect x0 x1 y0 y1 k rmat) ->
-      rectHit x0 x1 y0 y1 vecX vecY vecZ (Vec3 (0, 0, 1)) k rmat
+      (rectHit x0 x1 y0 y1 vecX vecY vecZ (Vec3 (0, 0, 1)) k rmat, gen)
     (XZRect x0 x1 z0 z1 k rmat) ->
-      rectHit x0 x1 z0 z1 vecX vecZ vecY (Vec3 (0, 1, 0)) k rmat
+      (rectHit x0 x1 z0 z1 vecX vecZ vecY (Vec3 (0, 1, 0)) k rmat, gen)
     (YZRect y0 y1 z0 z1 k rmat) ->
-      rectHit y0 y1 z0 z1 vecY vecZ vecX (Vec3 (1, 0, 0)) k rmat
+      (rectHit y0 y1 z0 z1 vecY vecZ vecX (Vec3 (1, 0, 0)) k rmat, gen)
   where
     rectHit i0 i1 j0 j1 vecI vecJ vecK outwardNormal k mat =
       if (t < t_min) || (t > t_max)
@@ -780,29 +792,31 @@ hit (Rect rct) r@(Ray ror rdr _) t_min t_max =
                             Hit t p normal rec_u rec_v frontFace mat
       where
         t = (k - vecK ror) / vecK rdr
-hit (Translate h offset) (Ray ror rdr tm) t_min t_max =
+hit (Translate offset h) (Ray ror rdr tm) t_min t_max gen =
   let m_r = Ray (ror `vecSub` offset) rdr tm
-   in case hit h m_r t_min t_max of
-        Nothing -> Nothing
-        Just (Hit t p outwardNormal rec_u rec_v _ mat) ->
+   in case hit h m_r t_min t_max gen of
+        n@(Nothing, _) -> n
+        (Just (Hit t p outwardNormal rec_u rec_v _ mat), g1) ->
           let (mFrontFace, mNormal) = faceNormal m_r outwardNormal
-          in Just (Hit t (p `vecAdd` offset) mNormal rec_u rec_v mFrontFace mat)
-hit (Rotate h axis sin_theta cos_theta _) (Ray ror rdr tm) t_min t_max =
+           in ( Just
+                  (Hit t (p `vecAdd` offset) mNormal rec_u rec_v mFrontFace mat)
+              , g1)
+hit (Rotate axis sin_theta cos_theta _ h) (Ray ror rdr tm) t_min t_max gen =
   let rotated_r =
         Ray
           (unRotatePoint axis sin_theta cos_theta ror)
           (unRotatePoint axis sin_theta cos_theta rdr)
           tm
-   in case hit h rotated_r t_min t_max of
-        Nothing -> Nothing
-        Just (Hit t p outwardNormal u v _ mat) ->
+   in case hit h rotated_r t_min t_max gen of
+        n@(Nothing, _) -> n
+        (Just (Hit t p outwardNormal u v _ mat), g1) ->
           let rot_p = rotatePoint axis sin_theta cos_theta p
               rot_outwardNormal =
                 rotatePoint axis sin_theta cos_theta outwardNormal
               (rot_frontFace, rot_normal) =
                 faceNormal rotated_r rot_outwardNormal
-           in Just (Hit t rot_p rot_normal u v rot_frontFace mat)
-hit sph r@(Ray ror rdr tm) t_min t_max =
+           in (Just (Hit t rot_p rot_normal u v rot_frontFace mat), g1)
+hit sph r@(Ray ror rdr tm) t_min t_max gen =
   let sc = sphCenter sph tm
       sr = sphRadius sph
       oc = ror `vecSub` sc
@@ -815,11 +829,11 @@ hit sph r@(Ray ror rdr tm) t_min t_max =
                  temp1 = ((-b) - sd) / a
                  temp2 = ((-b) + sd) / a
               in if | t_min < temp1 && temp1 < t_max ->
-                      Just $ recHit temp1 r sph
+                      (Just $ recHit temp1 r sph, gen)
                     | t_min < temp2 && temp2 < t_max ->
-                      Just $ recHit temp2 r sph
-                    | otherwise -> Nothing
-        else Nothing
+                      (Just $ recHit temp2 r sph, gen)
+                    | otherwise -> (Nothing, gen)
+        else (Nothing, gen)
 
 faceNormal :: Ray -> Vec3 -> (Bool, Vec3)
 faceNormal (Ray _ rdr _) outwardNormal =
@@ -881,23 +895,23 @@ randomVec3DoubleRM mn mx = do
   z <- randomDoubleRM mn mx
   return $ Vec3 (x, y, z)
 
-_randomInUnitSphereM :: RandomState s Vec3
-_randomInUnitSphereM = do
+randomInUnitSphereM :: RandomState s Vec3
+randomInUnitSphereM = do
   gRef <- asks getGenRef
   gen <- lift $ readSTRef gRef
-  let (rUnit, gen1) = _randomInUnitSphere gen
+  let (rUnit, gen1) = randomInUnitSphere gen
   lift $ writeSTRef gRef gen1
   return rUnit
 
-_randomInUnitSphere :: RandGen -> (Vec3, RandGen)
-_randomInUnitSphere gen =
+randomInUnitSphere :: RandGen -> (Vec3, RandGen)
+randomInUnitSphere gen =
   let (x, g1) = randomDouble gen
       (y, g2) = randomDouble g1
       (z, g3) = randomDouble g2
       p = scale 2.0 (Vec3 (x, y, z)) `vecSub` Vec3 (1.0, 1.0, 1.0)
    in if squaredLength p < 1.0
         then (p, g3)
-        else _randomInUnitSphere g3
+        else randomInUnitSphere g3
 
 randomInUnitDiskM :: RandomState s Vec3
 randomInUnitDiskM = do
@@ -930,7 +944,7 @@ randomUnitVectorM = do
 
 _randomInHemisphereM :: XYZ -> RandomState s Vec3
 _randomInHemisphereM n = do
-  inUnitSphere <- _randomInUnitSphereM
+  inUnitSphere <- randomInUnitSphereM
   if (inUnitSphere `dot` n) > 0.0
     then return inUnitSphere
     else return (vecNegate inUnitSphere)
@@ -1000,11 +1014,15 @@ rayColor ray depth = rayColorHelp ray depth id
         then return $ alb_acc (albedo (0.0, 0.0, 0.0))
         else do
           htbls <- asks getSceneHittables
-          case hit htbls r epsilon infinity of
-            Nothing -> do
+          gRef <- asks getGenRef
+          gen <- lift $ readSTRef gRef
+          case hit htbls r epsilon infinity gen of
+            (Nothing, g1) -> do
               bgd <- asks getBackground
+              lift $ writeSTRef gRef g1
               return $ alb_acc bgd
-            Just h@(Hit _ hp _ hu hv _ hm) -> do
+            (Just h@(Hit _ hp _ hu hv _ hm), g1) -> do
+              lift $ writeSTRef gRef g1
               let em@(Albedo emv) = emitted hm hu hv hp
               mscatter <- scatter hm r h
               case mscatter of
