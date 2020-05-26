@@ -445,6 +445,7 @@ data Hittable
                  Point3     -- | msphere_center1
                  Time     -- | msphere_time0
                  Time     -- | msphere_time1
+                 Time     -- | duration
                  Double   -- | msphere_radius
                  Material -- | msphere_material
   | Rect Rectangle
@@ -470,7 +471,7 @@ sphere :: Point3 -> Double -> Material -> Hittable
 sphere = Sphere
 
 movingSphere :: Point3 -> Point3 -> Time -> Time -> Double -> Material -> Hittable
-movingSphere = MovingSphere
+movingSphere c0 c1 t0 t1 = MovingSphere c0 c1 t0 t1 (t1 - t0)
 
 cuboid :: Point3 -> Point3 -> Material -> Hittable
 cuboid bmin@(Vec3 (x0, y0, z0)) bmax@(Vec3 (x1, y1, z1)) mat = Cuboid
@@ -584,34 +585,21 @@ data Box = Box
   } deriving (Show)
 
 boxRayIntersect :: Box -> Ray -> Double -> Double -> Bool
-boxRayIntersect (Box (Vec3 (minX, minY, minZ)) (Vec3 (maxX, maxY, maxZ))) (Ray (Vec3 (orX, orY, orZ)) (Vec3 (drX, drY, drZ)) _) t_min t_max
-  = all
+boxRayIntersect (Box (Vec3 (minX, minY, minZ)) (Vec3 (maxX, maxY, maxZ))) (Ray (Vec3 (orX, orY, orZ)) (Vec3 (drX, drY, drZ)) _) t_min t_max =
+  all
     (\(ror, rdr, mn, mx) ->
-      let t0   = min ((mn - ror) / rdr) ((mx - ror) / rdr)
-          t1   = max ((mn - ror) / rdr) ((mx - ror) / rdr)
-          tmin = max t0 t_min
-          tmax = min t1 t_max
-      in  tmax > tmin
-    )
+       let ta = (mn - ror) / rdr
+           tb = (mx - ror) / rdr
+           (t0, t1) =
+             if ta < tb
+               then (ta, tb)
+               else (tb, ta)
+           tmin = max t0 t_min
+           tmax = min t1 t_max
+        in tmax > tmin)
     [(orX, drX, minX, maxX), (orY, drY, minY, maxY), (orZ, drZ, minZ, maxZ)]
 
 type Time = Double
-
-sphCenter :: Hittable -> Double -> Point3
-sphCenter (Sphere c _ _) _ = c
-sphCenter (MovingSphere c0 c1 t0 t1 _ _) t =
-  c0 `vecAdd` scale ((t - t0) / (t1 - t0)) (c1 `vecSub` c0)
-sphCenter x _ = error $ "sphCenter called on non-sphere " ++ show x
-
-sphRadius :: Hittable -> Double
-sphRadius (Sphere _ r _)             = r
-sphRadius (MovingSphere _ _ _ _ r _) = r
-sphRadius x = error $ "sphRadius called on non-sphere " ++ show x
-
-sphMaterial :: Hittable -> Material
-sphMaterial (Sphere _ _ m)             = m
-sphMaterial (MovingSphere _ _ _ _ _ m) = m
-sphMaterial x = error $ "sphMaterial called on non-sphere " ++ show x
 
 scatter :: Material -> Ray -> Hit -> RandomState s (Maybe (Ray, Albedo))
 scatter (Lambertian tex) (Ray _ _ rtime) (Hit _ hp hn hu hv _ _) = do
@@ -677,7 +665,7 @@ boundingBox :: Hittable -> Maybe (Time, Time) -> Box
 boundingBox (Sphere c r _) _ =
   let rad = Vec3 (r, r, r)
    in Box (c `vecSub` rad) (c `vecAdd` rad)
-boundingBox (MovingSphere c0 c1 _ _ r _) _ =
+boundingBox (MovingSphere c0 c1 _ _ _ r _) _ =
   let rad = Vec3 (r, r, r)
       box0 = Box (c0 `vecSub` rad) (c0 `vecAdd` rad)
       box1 = Box (c1 `vecSub` rad) (c1 `vecAdd` rad)
@@ -845,24 +833,34 @@ hit (ConstantMedium nInvD phFunc boundary) ray@(Ray _ rdr _) t_min t_max gen
                                 $ Hit newt newp (Vec3 (1, 0, 0)) 0 0 True phFunc
                               , g3
                               )
-hit sph r@(Ray ror rdr tm) t_min t_max gen =
-  let sc = sphCenter sph tm
-      sr = sphRadius sph
-      oc = ror `vecSub` sc
-      a = dot rdr rdr
-      b = seq oc (dot oc rdr)
-      c = seq sr (dot oc oc - (sr * sr))
-      discriminant = b * b - a * c
-   in if discriminant > 0
-        then let sd = sqrt discriminant
-                 temp1 = ((-b) - sd) / a
-                 temp2 = ((-b) + sd) / a
-              in if | t_min < temp1 && temp1 < t_max ->
-                      (Just $ recHit temp1 r sph, gen)
-                    | t_min < temp2 && temp2 < t_max ->
-                      (Just $ recHit temp2 r sph, gen)
-                    | otherwise -> (Nothing, gen)
-        else (Nothing, gen)
+hit (Sphere sc sr sm) r@(Ray ror rdr _) t_min t_max gen =
+  if discriminant > 0
+    then let sd = sqrt discriminant
+             temp1 = ((-b) - sd) / a
+             temp2 = ((-b) + sd) / a
+          in if | t_min < temp1 && temp1 < t_max -> (Just $ recHit temp1, gen)
+                | t_min < temp2 && temp2 < t_max -> (Just $ recHit temp2, gen)
+                | otherwise -> (Nothing, gen)
+    else (Nothing, gen)
+  where
+    oc = ror `vecSub` sc
+    a = dot rdr rdr
+    b = seq oc (dot oc rdr)
+    c = seq sr (dot oc oc - (sr * sr))
+    discriminant = b * b - a * c
+    recHit :: Double -> Hit
+    recHit temp =
+      let p = r `at` temp
+          pShift = p `vecSub` sc
+          outwardNormal = divide pShift sr
+          (frontFace, normal) = faceNormal r outwardNormal
+          phi = atan2 (vecZ outwardNormal) (vecX outwardNormal)
+          theta = asin (vecY outwardNormal)
+          (u, v) = (1.0 - ((phi + pi) / (2 * pi)), (theta + (pi / 2)) / pi)
+       in Hit temp p normal u v frontFace sm
+hit (MovingSphere c0 c1 t0 _ tp sr sm) r@(Ray _ _ t) t_min t_max gen =
+  let sc = c0 `vecAdd` scale ((t - t0) / tp) (c1 `vecSub` c0)
+  in hit (Sphere sc sr sm) r t_min t_max gen
 
 faceNormal :: Ray -> Point3 -> (Bool, Point3)
 faceNormal (Ray _ rdr _) outwardNormal =
@@ -871,20 +869,6 @@ faceNormal (Ray _ rdr _) outwardNormal =
       , if frontFace
           then outwardNormal
           else vecNegate outwardNormal)
-
-recHit :: Double -> Ray -> Hittable -> Hit
-recHit temp r@(Ray _ _ tm) sph =
-  let sc = sphCenter sph tm
-      sr = sphRadius sph
-      sm = sphMaterial sph
-      p = r `at` temp
-      pShift = p `vecSub` sc
-      outwardNormal = divide pShift sr
-      (frontFace, normal) = faceNormal r outwardNormal
-      (u, v) = let phi = atan2 (vecZ outwardNormal) (vecX outwardNormal)
-                   theta = asin (vecY outwardNormal)
-        in (1.0 - ((phi + pi) / (2 * pi)), (theta + (pi / 2)) / pi)
-   in Hit temp p normal u v frontFace sm
 
 randomDouble :: RandGen -> (Double, RandGen)
 randomDouble (RandGen g) =
@@ -1444,7 +1428,7 @@ makeNextWeekFinalScene earthtex t0 t1 gen =
       let white = Lambertian $ ConstantColor (albedo (0.73, 0.73, 0.73))
       let w = 100 :: Double
       let y0 = 0 :: Double
-      boxes1 <- (makeBVH (Just (0, 1))) =<< S.fromList <$>
+      boxes1 <- makeBVH (Just (0, 1)) =<< S.fromList <$>
         mapM
           (\(i, j) -> do
              let x0 = i * w - 1000
