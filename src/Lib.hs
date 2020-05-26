@@ -584,19 +584,16 @@ data Box = Box
   } deriving (Show)
 
 boxRayIntersect :: Box -> Ray -> Double -> Double -> Bool
-boxRayIntersect (Box bb_min bb_max) (Ray ror rdr _) t_min t_max = all
-  (\cur_axis ->
-    let c_or     = cur_axis ror
-        c_dr     = cur_axis rdr
-        c_bb_min = cur_axis bb_min
-        c_bb_max = cur_axis bb_max
-        t0       = min ((c_bb_min - c_or) / c_dr) ((c_bb_max - c_or) / c_dr)
-        t1       = max ((c_bb_min - c_or) / c_dr) ((c_bb_max - c_or) / c_dr)
-        tmin     = max t0 t_min
-        tmax     = min t1 t_max
-    in  tmax > tmin
-  )
-  [vecX, vecY, vecZ]
+boxRayIntersect (Box (Vec3 (minX, minY, minZ)) (Vec3 (maxX, maxY, maxZ))) (Ray (Vec3 (orX, orY, orZ)) (Vec3 (drX, drY, drZ)) _) t_min t_max
+  = all
+    (\(ror, rdr, mn, mx) ->
+      let t0   = min ((mn - ror) / rdr) ((mx - ror) / rdr)
+          t1   = max ((mn - ror) / rdr) ((mx - ror) / rdr)
+          tmin = max t0 t_min
+          tmax = min t1 t_max
+      in  tmax > tmin
+    )
+    [(orX, drX, minX, maxX), (orY, drY, minY, maxY), (orZ, drZ, minZ, maxZ)]
 
 type Time = Double
 
