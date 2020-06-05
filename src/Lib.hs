@@ -42,7 +42,8 @@ import qualified Data.Sequence                 as S
 import           Data.STRef.Lazy
 import qualified Data.Vector                   as VV (Vector, fromList, (!))
 import           Data.Vector.Unboxed           (Vector, enumFromN, freeze, thaw)
-import qualified Data.Vector.Unboxed           as V ((!))
+import qualified Data.Vector.Unboxed           as V (foldr, fromList, map,
+                                                     toList, zipWith, (!))
 import qualified Data.Vector.Unboxed.Mutable   as MV (swap)
 import           Data.Word                     (Word64, Word8)
 import           System.IO                     (Handle, hPutStr, hPutStrLn,
@@ -182,67 +183,64 @@ instance Show RGB where
 type Point3 = Vec3
 
 point3 :: (Double, Double, Double) -> Point3
-point3 = Vec3
+point3 (x, y, z) = Vec3 $ V.fromList [x, y, z]
 
-newtype Vec3 = Vec3 (Double, Double, Double)
+newtype Vec3 = Vec3 (Vector Double)
 
 instance NFData Vec3 where
-  rnf (Vec3 (x, y, z)) = rnf x `seq` rnf y `seq` rnf z
+  rnf (Vec3 vec) = rnf vec
 
 vecX :: Vec3 -> Double
-vecX (Vec3 (x, _ , _)) = x
+vecX (Vec3 vec) = vec V.! 0
 
 vecY :: Vec3 -> Double
-vecY (Vec3 (_, y, _)) = y
+vecY (Vec3 vec) = vec V.! 1
 
 vecZ :: Vec3 -> Double
-vecZ (Vec3 (_, _, z)) = z
+vecZ (Vec3 vec) = vec V.! 2
 
 instance Show Vec3 where
-  show (Vec3 (x, y, z)) = unwords [show x, show y, show z]
+  show (Vec3 vec) = show vec
 
 vecMul :: Vec3 -> Vec3 -> Vec3
-vecMul (Vec3 (x1, y1, z1)) (Vec3 (x2, y2, z2)) =
-  Vec3 (x1 * x2, y1 * y2, z1 * z2)
+vecMul (Vec3 vec1) (Vec3 vec2) = Vec3 (V.zipWith (*) vec1 vec2)
 
 _vecDiv :: Vec3 -> Vec3 -> Vec3
-_vecDiv (Vec3 (x1, y1, z1)) (Vec3 (x2, y2, z2)) =
-  Vec3 (x1 / x2, y1 / y2, z1 / z2)
+_vecDiv (Vec3 vec1) (Vec3 vec2) = Vec3 (V.zipWith (/) vec1 vec2)
 
 vecAdd :: Vec3 -> Vec3 -> Vec3
-vecAdd (Vec3 (x1, y1, z1)) (Vec3 (x2, y2, z2)) =
-  Vec3 (x1 + x2, y1 + y2, z1 + z2)
+vecAdd (Vec3 vec1) (Vec3 vec2) = Vec3 (V.zipWith (+) vec1 vec2)
 
 vecSub :: Vec3 -> Vec3 -> Vec3
-vecSub (Vec3 (x1, y1, z1)) (Vec3 (x2, y2, z2)) =
-  Vec3 (x1 - x2, y1 - y2, z1 - z2)
+vecSub (Vec3 vec1) (Vec3 vec2) = Vec3 (V.zipWith (-) vec1 vec2)
 
 vecNegate :: Vec3 -> Vec3
-vecNegate (Vec3 (x, y, z)) = Vec3 (-x, -y, -z)
+vecNegate (Vec3 vec) = Vec3 (V.map negate vec)
 
 length :: Vec3 -> Double
-length (Vec3 (x, y, z)) = sqrt (x * x + y * y + z * z)
+length vec = sqrt (squaredLength vec)
 
 squaredLength :: Vec3 -> Double
-squaredLength (Vec3 (x, y, z)) = x * x + y * y + z * z
+squaredLength (Vec3 vec) = V.foldr (\x acc -> (x * x) + acc) 0 vec
 
 makeUnitVector :: Vec3 -> Vec3
-makeUnitVector v@(Vec3 (x, y, z)) =
-  let m = Lib.length v
-   in Vec3 (x / m, y / m, z / m)
+makeUnitVector v = divide v (Lib.length v)
 
 scale :: Double -> Vec3 -> Vec3
-scale k (Vec3 (x, y, z)) = Vec3 (k * x, k * y, k * z)
+scale k (Vec3 vec) = Vec3 (V.map (* k) vec)
 
 divide :: Vec3 -> Double -> Vec3
-divide (Vec3 (x, y, z)) k = Vec3 (x / k, y / k, z / k)
+divide (Vec3 vec) k = Vec3 (V.map (/ k) vec)
 
 dot :: Vec3 -> Vec3 -> Double
-dot (Vec3 (x1, y1, z1)) (Vec3 (x2, y2, z2)) = x1 * x2 + y1 * y2 + z1 * z2
+dot (Vec3 vec1) (Vec3 vec2) =
+  vec1 V.! 0 * vec2 V.! 0 + vec1 V.! 1 * vec2 V.! 1 + vec1 V.! 2 * vec2 V.! 2
 
 cross :: Vec3 -> Vec3 -> Vec3
-cross (Vec3 (x1, y1, z1)) (Vec3 (x2, y2, z2)) =
-  Vec3 (y1 * z2 - z1 * y2, z1 * x2 - x1 * z2, x1 * y2 - y1 * x2)
+cross (Vec3 vec1) (Vec3 vec2) =
+  let [x1, y1, z1] = V.toList vec1
+      [x2, y2, z2] = V.toList vec2
+  in point3 (y1 * z2 - z1 * y2, z1 * x2 - x1 * z2, x1 * y2 - y1 * x2)
 
 clamp :: (Double, Double) -> Double -> Double
 clamp (mn, mx) x =
@@ -254,8 +252,8 @@ scaleColor :: Double -> Word8
 scaleColor x = floor $ 256 * clamp (0.0, 0.999) (sqrt x)
 
 albedoToColor :: Albedo -> RGB
-albedoToColor (Albedo (Vec3 (x, y, z))) =
-  RGB (scaleColor x, scaleColor y, scaleColor z)
+albedoToColor (Albedo v) =
+  RGB (scaleColor (vecX v), scaleColor (vecY v), scaleColor (vecZ v))
 
 colorToAlbedo :: RGB -> Albedo
 colorToAlbedo (RGB (r, g, b)) =
@@ -308,7 +306,7 @@ newtype Albedo = Albedo Vec3
   deriving Show
 
 albedo :: (Double, Double, Double) -> Albedo
-albedo rgb = Albedo $ Vec3 rgb
+albedo (r, g, b) = Albedo $ Vec3 $ V.fromList [r, g, b]
 
 instance NFData Albedo where
   rnf (Albedo v) = rnf v `seq` ()
@@ -398,7 +396,7 @@ perlinInterp c u v w =
            acc +
            ((i * uu + (1 - i) * (1 - uu)) * (j * vv + (1 - j) * (1 - vv)) *
             (k * ww + (1 - k) * (1 - ww)) *
-            (val `dot` Vec3 (u - i, v - j, w - k))))
+            (val `dot` point3 (u - i, v - j, w - k))))
         0.0
         c
 
@@ -419,7 +417,7 @@ textureValue (CheckerTexture oddTex evenTex) u v p =
   then textureValue oddTex u v p
   else textureValue evenTex u v p
 textureValue ptex@Perlin{} _ _ p =
-  Albedo $ scale (marbleTexture ptex p) $ Vec3 (1.0, 1.0, 1.0)
+  Albedo $ scale (marbleTexture ptex p) $ point3 (1.0, 1.0, 1.0)
 textureValue (ImageTexture (Just im) nx ny) u v _ =
   let nxd = fromIntegral nx
       i = floor $ clamp (0, nxd - epsilon) (u * nxd)
@@ -470,20 +468,24 @@ data Hittable
 sphere :: Point3 -> Double -> Material -> Hittable
 sphere = Sphere
 
-movingSphere :: Point3 -> Point3 -> Time -> Time -> Double -> Material -> Hittable
+movingSphere ::
+     Point3 -> Point3 -> Time -> Time -> Double -> Material -> Hittable
 movingSphere c0 c1 t0 t1 = MovingSphere c0 c1 t0 t1 (t1 - t0)
 
 cuboid :: Point3 -> Point3 -> Material -> Hittable
-cuboid bmin@(Vec3 (x0, y0, z0)) bmax@(Vec3 (x1, y1, z1)) mat = Cuboid
-  bmin
-  bmax
-  [ XYRect x0 x1 y0 y1 z1 mat
-  , XYRect x0 x1 y0 y1 z0 mat
-  , XZRect x0 x1 z0 z1 y1 mat
-  , XZRect x0 x1 z0 z1 y0 mat
-  , YZRect y0 y1 z0 z1 x1 mat
-  , YZRect y0 y1 z0 z1 x0 mat
-  ]
+cuboid bmin@(Vec3 vec0) bmax@(Vec3 vec1) mat =
+  let [x0, y0, z0] = V.toList vec0
+      [x1, y1, z1] = V.toList vec1
+   in Cuboid
+        bmin
+        bmax
+        [ XYRect x0 x1 y0 y1 z1 mat
+        , XYRect x0 x1 y0 y1 z0 mat
+        , XZRect x0 x1 z0 z1 y1 mat
+        , XZRect x0 x1 z0 z1 y0 mat
+        , YZRect y0 y1 z0 z1 x1 mat
+        , YZRect y0 y1 z0 z1 x0 mat
+        ]
 
 data Rectangle
   = XYRect Double   -- | xyrect_x0
@@ -531,48 +533,59 @@ rotate axis angle h = Rotate axis sin_theta cos_theta (Box h_min h_max) h
     rad = degreesToRadians angle
     sin_theta = sin rad
     cos_theta = cos rad
-    (Box (Vec3 (bbMinX, bbMinY, bbMinZ)) (Vec3 (bbMaxX, bbMaxY, bbMaxZ))) =
-      boundingBox h Nothing
-    updateMinMax :: Point3 -> (Point3, Point3) -> (Point3, Point3)
-    updateMinMax (Vec3 (i, j, k)) (Vec3 (minX, minY, minZ), Vec3 (maxX, maxY, maxZ)) =
-      let x = i * bbMaxX + (1 - i) * bbMinX
-          y = j * bbMaxY + (1 - j) * bbMinY
-          z = k * bbMaxZ + (1 - k) * bbMinZ
-          Vec3 (newX, newY, newZ) =
-            rotatePoint axis sin_theta cos_theta (Vec3 (x, y, z))
-       in ( Vec3 (min newX minX, min newY minY, min newZ minZ)
-          , Vec3 (max newX maxX, max newY maxY, max newZ maxZ))
+    (Box bbMin bbMax) = boundingBox h Nothing
+    updateMinMax ::
+         (Double, Double, Double) -> (Point3, Point3) -> (Point3, Point3)
+    updateMinMax (i, j, k) (minV, maxV) =
+      let x = i * vecX bbMax + (1 - i) * vecX bbMin
+          y = j * vecY bbMax + (1 - j) * vecY bbMin
+          z = k * vecZ bbMax + (1 - k) * vecZ bbMin
+          newV = rotatePoint axis sin_theta cos_theta (point3 (x, y, z))
+       in ( point3
+              ( min (vecX newV) (vecX minV)
+              , min (vecY newV) (vecY minV)
+              , min (vecZ newV) (vecZ minV))
+          , point3
+              ( max (vecX newV) (vecX maxV)
+              , max (vecY newV) (vecY maxV)
+              , max (vecZ newV) (vecZ maxV)))
     (h_min, h_max) =
       foldr
         updateMinMax
-        ( Vec3 (infinity, infinity, infinity)
-        , Vec3 (-infinity, -infinity, -infinity))
-        ([Vec3 (i, j, k) | i <- [0, 1, 2], j <- [0, 1, 2], k <- [0, 1, 2]])
+        ( point3 (infinity, infinity, infinity)
+        , point3 (-infinity, -infinity, -infinity))
+        ([(i, j, k) | i <- [0, 1, 2], j <- [0, 1, 2], k <- [0, 1, 2]])
 
 rotatePoint :: Axis -> Double -> Double -> Point3 -> Point3
-rotatePoint axis sin_theta cos_theta (Vec3 (pX, pY, pZ)) =
-  case axis of
+rotatePoint axis sin_theta cos_theta p =
+  let pX = vecX p
+      pY = vecY p
+      pZ = vecZ p
+  in case axis of
     XAxis ->
-      Vec3
+      point3
         (pX, cos_theta * pY - sin_theta * pZ, sin_theta * pY + cos_theta * pZ)
     YAxis ->
-      Vec3
+      point3
         (cos_theta * pX + sin_theta * pZ, pY, -sin_theta * pX + cos_theta * pZ)
     ZAxis ->
-      Vec3
+      point3
         (cos_theta * pX - sin_theta * pY, sin_theta * pX + cos_theta * pY, pZ)
 
 unRotatePoint :: Axis -> Double -> Double -> Point3 -> Point3
-unRotatePoint axis sin_theta cos_theta (Vec3 (pX, pY, pZ)) =
-  case axis of
+unRotatePoint axis sin_theta cos_theta p =
+  let pX = vecX p
+      pY = vecY p
+      pZ = vecZ p
+  in case axis of
     XAxis ->
-      Vec3
+      point3
         (pX, cos_theta * pY + sin_theta * pZ, -sin_theta * pY + cos_theta * pZ)
     YAxis ->
-      Vec3
+      point3
         (cos_theta * pX - sin_theta * pZ, pY, sin_theta * pX + cos_theta * pZ)
     ZAxis ->
-      Vec3
+      point3
         (cos_theta * pX + sin_theta * pY, -sin_theta * pX + cos_theta * pY, pZ)
 
 constantMedium :: Double -> Texture -> Hittable -> Hittable
@@ -585,7 +598,7 @@ data Box = Box
   } deriving (Show)
 
 boxRayIntersect :: Box -> Ray -> Double -> Double -> Bool
-boxRayIntersect (Box (Vec3 (minX, minY, minZ)) (Vec3 (maxX, maxY, maxZ))) (Ray (Vec3 (orX, orY, orZ)) (Vec3 (drX, drY, drZ)) _) t_min t_max =
+boxRayIntersect (Box minV maxV) (Ray orV drV _) t_min t_max =
   all
     (\(ror, rdr, mn, mx) ->
        let ta = (mn - ror) / rdr
@@ -597,7 +610,10 @@ boxRayIntersect (Box (Vec3 (minX, minY, minZ)) (Vec3 (maxX, maxY, maxZ))) (Ray (
            tmin = max t0 t_min
            tmax = min t1 t_max
         in tmax > tmin)
-    [(orX, drX, minX, maxX), (orY, drY, minY, maxY), (orZ, drZ, minZ, maxZ)]
+    [ (vecX orV, vecX drV, vecX minV, vecX maxV)
+    , (vecY orV, vecY drV, vecY minV, vecY maxV)
+    , (vecZ orV, vecZ drV, vecZ minV, vecZ maxV)
+    ]
 
 type Time = Double
 
@@ -663,10 +679,10 @@ schlick cosine ref_idx =
 
 boundingBox :: Hittable -> Maybe (Time, Time) -> Box
 boundingBox (Sphere c r _) _ =
-  let rad = Vec3 (r, r, r)
+  let rad = point3 (r, r, r)
    in Box (c `vecSub` rad) (c `vecAdd` rad)
 boundingBox (MovingSphere c0 c1 _ _ _ r _) _ =
-  let rad = Vec3 (r, r, r)
+  let rad = point3 (r, r, r)
       box0 = Box (c0 `vecSub` rad) (c0 `vecAdd` rad)
       box1 = Box (c1 `vecSub` rad) (c1 `vecAdd` rad)
    in surroundingBox box0 box1
@@ -685,11 +701,11 @@ boundingBox (Rotate _ _ _ box _) _ = box
 boundingBox (ConstantMedium _ _ h) mt = boundingBox h mt
 
 surroundingBox :: Box -> Box -> Box
-surroundingBox (Box b0min b0max) (Box b1min b1max) =
-  let (Vec3 (b0min_x, b0min_y, b0min_z)) = b0min
-      (Vec3 (b0max_x, b0max_y, b0max_z)) = b0max
-      (Vec3 (b1min_x, b1min_y, b1min_z)) = b1min
-      (Vec3 (b1max_x, b1max_y, b1max_z)) = b1max
+surroundingBox (Box (Vec3 b0min) (Vec3 b0max)) (Box (Vec3 b1min) (Vec3 b1max)) =
+  let [b0min_x, b0min_y, b0min_z] = V.toList b0min
+      [b0max_x, b0max_y, b0max_z] = V.toList b0max
+      [b1min_x, b1min_y, b1min_z] = V.toList b1min
+      [b1max_x, b1max_y, b1max_z] = V.toList b1max
       small =
         point3 (min b0min_x b1min_x, min b0min_y b1min_y, min b0min_z b1min_z)
       big =
@@ -807,8 +823,8 @@ hit (Rotate axis sin_theta cos_theta _ h) (Ray ror rdr tm) t_min t_max gen =
               (rot_frontFace, rot_normal) =
                 faceNormal rotated_r rot_outwardNormal
            in (Just (Hit t rot_p rot_normal u v rot_frontFace mat), g1)
-hit (ConstantMedium nInvD phFunc boundary) ray@(Ray _ rdr _) t_min t_max gen
-  = case hit boundary ray (-infinity) infinity gen of
+hit (ConstantMedium nInvD phFunc boundary) ray@(Ray _ rdr _) t_min t_max gen =
+  case hit boundary ray (-infinity) infinity gen of
     n@(Nothing, _) -> n
     (Just (Hit h1t _ _ _ _ _ _), g1) ->
       case hit boundary ray (h1t + epsilon) infinity g1 of
@@ -827,12 +843,14 @@ hit (ConstantMedium nInvD phFunc boundary) ray@(Ray _ rdr _) t_min t_max gen
                   in  if hitDist > distInsideBound
                         then (Nothing, g3)
                         else
-                          let newt = rec1t + (hitDist / rayLength)
-                              newp = ray `at` newt
-                          in  ( Just
-                                $ Hit newt newp (Vec3 (1, 0, 0)) 0 0 True phFunc
-                              , g3
-                              )
+                          let
+                            newt = rec1t + (hitDist / rayLength)
+                            newp = ray `at` newt
+                          in
+                            ( Just
+                              $ Hit newt newp (point3 (1, 0, 0)) 0 0 True phFunc
+                            , g3
+                            )
 hit (Sphere sc sr sm) r@(Ray ror rdr _) t_min t_max gen =
   if discriminant > 0
     then let sd = sqrt discriminant
@@ -899,14 +917,14 @@ randomVec3DoubleM = do
   let (y, g2) = randomDouble g1
   let (z, g3) = randomDouble g2
   lift $ writeSTRef gRef g3
-  return $ Vec3 (x, y, z)
+  return $ point3 (x, y, z)
 
 randomVec3DoubleRM :: Double -> Double -> RandomState s Vec3
 randomVec3DoubleRM mn mx = do
   x <- randomDoubleRM mn mx
   y <- randomDoubleRM mn mx
   z <- randomDoubleRM mn mx
-  return $ Vec3 (x, y, z)
+  return $ point3 (x, y, z)
 
 randomInUnitSphereM :: RandomState s Vec3
 randomInUnitSphereM = do
@@ -921,7 +939,7 @@ randomInUnitSphere gen =
   let (x, g1) = randomDouble gen
       (y, g2) = randomDouble g1
       (z, g3) = randomDouble g2
-      p = scale 2.0 (Vec3 (x, y, z)) `vecSub` Vec3 (1.0, 1.0, 1.0)
+      p = scale 2.0 (point3 (x, y, z)) `vecSub` point3 (1.0, 1.0, 1.0)
    in if squaredLength p < 1.0
         then (p, g3)
         else randomInUnitSphere g3
@@ -938,7 +956,7 @@ randomInUnitDisk :: RandGen -> (Vec3, RandGen)
 randomInUnitDisk gen =
   let (x, g1) = randomDouble gen
       (y, g2) = randomDouble g1
-      p = scale 2.0 (Vec3 (x, y, 0)) `vecSub` Vec3 (1.0, 1.0, 0)
+      p = scale 2.0 (point3 (x, y, 0)) `vecSub` point3 (1.0, 1.0, 0)
    in if squaredLength p < 1.0
         then (p, g2)
         else randomInUnitDisk g2
@@ -953,7 +971,7 @@ randomUnitVectorM = do
   let z = (zz * 2) - 1
   let r = sqrt (1 - z * z)
   lift $ writeSTRef gRef g2
-  return $ Vec3 (r * cos a, r * sin a, z)
+  return $ point3 (r * cos a, r * sin a, z)
 
 _randomInHemisphereM :: Point3 -> RandomState s Vec3
 _randomInHemisphereM n = do
@@ -1144,18 +1162,18 @@ makeCornellBoxScene t0 t1 gen = runST $ do
         :<| rect XZPlane 0   555 0   555 555 white
         :<| rect XYPlane 0   555 0   555 555 white
         :<| translate
-              (Vec3 (265, 0, 295))
+              (point3 (265, 0, 295))
               (rotate YAxis
                       15
-                      (cuboid (Vec3 (0, 0, 0)) (Vec3 (165, 330, 165)) white)
+                      (cuboid (point3 (0, 0, 0)) (point3 (165, 330, 165)) white)
               )
         :<| translate
-              (Vec3 (130, 0, 65))
+              (point3 (130, 0, 65))
               ( rotate YAxis (-18)
               $ rotate
                   ZAxis
                   30
-                  (cuboid (Vec3 (0, 0, 0)) (Vec3 (165, 165, 165)) white)
+                  (cuboid (point3 (0, 0, 0)) (point3 (165, 165, 165)) white)
               )
         :<| Empty
         )
@@ -1182,14 +1200,14 @@ makeCornellSmokeBoxScene t0 t1 gen = runST $ do
         :<| rect XZPlane 0   555 0   555 555 white
         :<| rect XYPlane 0   555 0   555 555 white
         :<| constantMedium 0.01 (ConstantColor (albedo (0, 0, 0)))
-              (translate (Vec3 (265, 0, 295))
+              (translate (point3 (265, 0, 295))
                 (rotate YAxis 15
-                  (cuboid (Vec3 (0, 0, 0)) (Vec3 (165, 330, 165)) white)
+                  (cuboid (point3 (0, 0, 0)) (point3 (165, 330, 165)) white)
                 )
               )
         :<| constantMedium 0.01 (ConstantColor (albedo (1, 1, 1)))
-              (translate (Vec3 (130, 0, 65))
-                (rotate YAxis (-18) (cuboid (Vec3 (0, 0, 0)) (Vec3 (165, 165, 165)) white)
+              (translate (point3 (130, 0, 65))
+                (rotate YAxis (-18) (cuboid (point3 (0, 0, 0)) (point3 (165, 165, 165)) white)
                 )
               )
         :<| Empty
@@ -1202,9 +1220,9 @@ makeCornellSmokeBoxScene t0 t1 gen = runST $ do
 cornellCamera :: (Int, Int) -> Camera
 cornellCamera (imageWidth, imageHeight) =
   newCamera
-    (Vec3 (278, 278, -800))
-    (Vec3 (278, 278, 0.0))
-    (Vec3 (0.0, 1.0, 0.0))
+    (point3 (278, 278, -800))
+    (point3 (278, 278, 0.0))
+    (point3 (0.0, 1.0, 0.0))
     40.0
     (fromIntegral imageWidth / fromIntegral imageHeight)
     0.1
@@ -1221,10 +1239,10 @@ makeSimpleLightScene t0 t1 gen = runST $ do
       let difflight = DiffuseLight $ ConstantColor $ albedo (4, 4, 4)
       makeBVH
         (Just (t0, t1))
-        (   sphere (Vec3 (0, -1000, 0)) 1000 (Lambertian perText)
+        (   sphere (point3 (0, -1000, 0)) 1000 (Lambertian perText)
 --               :<| Sphere (Vec3 (0, 2, 0)) 2 (Lambertian (ConstantColor $ albedo (0.5, 0.0, 0.3)))
-        :<| sphere (Vec3 (0, 2, 0))     2    (Lambertian perText)
-        :<| sphere (Vec3 (0, 7, 0))     2    difflight
+        :<| sphere (point3 (0, 2, 0))     2    (Lambertian perText)
+        :<| sphere (point3 (0, 7, 0))     2    difflight
         :<| rect XYPlane 3 5 1 3 (-2) difflight
         :<| Empty
         )
@@ -1250,7 +1268,7 @@ makeEarthScene earthTex t0 t1 gen =
       runReaderT
         (makeBVH
            (Just (t0, t1))
-           (Sphere (Vec3 (0, 0, 0)) 2 (Lambertian earthTex) :<| Empty))
+           (Sphere (point3 (0, 0, 0)) 2 (Lambertian earthTex) :<| Empty))
         (dummyRenderEnv gRef)
     g1 <- readSTRef gRef
     return ((world, albedo (0, 0, 0)), g1)
@@ -1258,9 +1276,9 @@ makeEarthScene earthTex t0 t1 gen =
 twoSpheresSceneCamera :: (Int, Int) -> Camera
 twoSpheresSceneCamera (imageWidth, imageHeight) =
   newCamera
-    (Vec3 (26.0, 4.0, 6.0))
-    (Vec3 (0.0, 2.0, 0.0))
-    (Vec3 (0.0, 1.0, 0.0))
+    (point3 (26.0, 4.0, 6.0))
+    (point3 (0.0, 2.0, 0.0))
+    (point3 (0.0, 1.0, 0.0))
     20.0
     (fromIntegral imageWidth / fromIntegral imageHeight)
     0.1
@@ -1277,8 +1295,8 @@ makeTwoPerlinSpheresScene t0 t1 gen =
         (do perText <- makePerlin 1.5
             makeBVH
               (Just (t0, t1))
-              (Sphere (Vec3 (0, -1000, 0)) 1000 (Lambertian perText) :<|
-               Sphere (Vec3 (0, 2, 0)) 2 (Lambertian perText) :<|
+              (Sphere (point3 (0, -1000, 0)) 1000 (Lambertian perText) :<|
+               Sphere (point3 (0, 2, 0)) 2 (Lambertian perText) :<|
                Empty))
         (dummyRenderEnv gRef)
     g1 <- readSTRef gRef
@@ -1300,8 +1318,8 @@ makeTwoSpheresScene t0 t1 gen =
       runReaderT
         (makeBVH
            (Just (t0, t1))
-           (Sphere (Vec3 (0, -10, 0)) 10 checkerMaterial :<|
-            Sphere (Vec3 (0, 10, 0)) 10 flatMaterial :<|
+           (Sphere (point3 (0, -10, 0)) 10 checkerMaterial :<|
+            Sphere (point3 (0, 10, 0)) 10 flatMaterial :<|
             Empty))
         (dummyRenderEnv gRef)
     g1 <- readSTRef gRef
@@ -1310,9 +1328,9 @@ makeTwoSpheresScene t0 t1 gen =
 randomSceneCamera :: (Int, Int) -> Camera
 randomSceneCamera (imageWidth, imageHeight) =
   newCamera
-    (Vec3 (13.0, 2.0, 3.0))
-    (Vec3 (0.0, 0.0, 0.0))
-    (Vec3 (0.0, 1.0, 0.0))
+    (point3 (13.0, 2.0, 3.0))
+    (point3 (0.0, 0.0, 0.0))
+    (point3 (0.0, 1.0, 0.0))
     20.0
     (fromIntegral imageWidth / fromIntegral imageHeight)
     0.1
@@ -1334,7 +1352,7 @@ makeRandomScene earthtex _ _ gen =
       let ns = [(x, y) | x <- [-11 .. 10], y <- [-11 .. 10]]
       let ground =
             sphere
-              (Vec3 (0.0, -1000.0, 0.0))
+              (point3 (0.0, -1000.0, 0.0))
               1000
               -- (Lambertian (ConstantColor $ albedo (0.5, 0.5, 0.5))) --gray
               (Lambertian
@@ -1345,18 +1363,18 @@ makeRandomScene earthtex _ _ gen =
             -- Sphere (Vec3 (0.0, 1.0, 0.0)) 1.0 (Dielectric (RefractiveIdx 1.5))
            =
             cuboid
-              (Vec3 (-0.75, 0.0, -0.75))
-              (Vec3 (0.75, 1.5, 0.75))
+              (point3 (-0.75, 0.0, -0.75))
+              (point3 (0.75, 1.5, 0.75))
               (Dielectric (RefractiveIdx 1.5))
       let s2 =
             sphere
-              (Vec3 (-4.0, 1.0, 0.0))
+              (point3 (-4.0, 1.0, 0.0))
               1.0
               -- (Lambertian (ConstantColor $ albedo (0.4, 0.2, 0.1)))
               (Lambertian earthtex)
       let s3 =
             sphere
-              (Vec3 (4.0, 1.0, 0.0))
+              (point3 (4.0, 1.0, 0.0))
               1.0
               (Metal (ConstantColor $ albedo (0.7, 0.6, 0.5)) (Fuzz 0.0))
       nps <- catMaybes <$> mapM makeRandomSphereM ns
@@ -1370,8 +1388,8 @@ makeRandomScene earthtex _ _ gen =
       px <- randomDoubleM
       py <- randomDoubleM
       let center =
-            Vec3 (fromIntegral a + 0.9 * px, 0.2, fromIntegral b + 0.9 * py)
-      if Lib.length (center `vecSub` Vec3 (4.0, 0.2, 0)) <= 0.9
+            point3 (fromIntegral a + 0.9 * px, 0.2, fromIntegral b + 0.9 * py)
+      if Lib.length (center `vecSub` point3 (4.0, 0.2, 0)) <= 0.9
         then return Nothing
         else if | mat < 0.8 -- Diffuse
                  ->
@@ -1384,7 +1402,7 @@ makeRandomScene earthtex _ _ gen =
                        Just $
                        movingSphere
                          center
-                         (center `vecAdd` Vec3 (sph_move_x, 0, sph_move_z))
+                         (center `vecAdd` point3 (sph_move_x, 0, sph_move_z))
                          0.0
                          1.0
                          0.2
@@ -1404,9 +1422,9 @@ makeRandomScene earthtex _ _ gen =
 nextWeekFinalSceneCamera :: (Int, Int) -> Camera
 nextWeekFinalSceneCamera (imageWidth, imageHeight) =
   newCamera
-    (Vec3 (575, 278, -525))
-    (Vec3 (320, 278, 0.0))
-    (Vec3 (0.0, 1.0, 0.0))
+    (point3 (575, 278, -525))
+    (point3 (320, 278, 0.0))
+    (point3 (0.0, 1.0, 0.0))
     40.0
     (fromIntegral imageWidth / fromIntegral imageHeight)
     0.1
@@ -1436,11 +1454,11 @@ makeNextWeekFinalScene earthtex t0 t1 gen =
              let x1 = x0 + w
              y1 <- randomDoubleRM 1 101
              let z1 = z0 + w
-             return $ cuboid (Vec3 (x0, y0, z0)) (Vec3 (x1, y1, z1)) ground)
+             return $ cuboid (point3 (x0, y0, z0)) (point3 (x1, y1, z1)) ground)
           [(i, j) | i <- [0 .. 19], j <- [0 .. 19]]
       let light = DiffuseLight $ ConstantColor (albedo (7, 7, 7))
-      let boundary1 = sphere (Vec3 (360, 150, 145)) 70 (Dielectric $ RefractiveIdx 1.5)
-      let boundary2 = sphere (Vec3 (0, 0, 0)) 5000 (Dielectric $ RefractiveIdx 1.5)
+      let boundary1 = sphere (point3 (360, 150, 145)) 70 (Dielectric $ RefractiveIdx 1.5)
+      let boundary2 = sphere (point3 (0, 0, 0)) 5000 (Dielectric $ RefractiveIdx 1.5)
       pertext <- makePerlin 0.1
       boxes2 <- makeBVH (Just (0, 1)) =<< S.fromList <$>
         replicateM 1000 (do randP <- randomVec3DoubleRM 0 165
@@ -1449,13 +1467,13 @@ makeNextWeekFinalScene earthtex t0 t1 gen =
         (Just (t0, t1))
         (   boxes1
         :<| rect XZPlane 113 443 127 432 554 light
-        :<| movingSphere (Vec3 (400, 400, 200)) (Vec3 (430, 400, 200)) t0 t1 50 (Lambertian (ConstantColor $ albedo (0.7, 0.3, 0.1)))
-        :<| sphere (Vec3 (260, 150, 45)) 50 (Dielectric $ RefractiveIdx 1.5)
-        :<| sphere (Vec3 (0, 150, 145)) 50 (Metal (ConstantColor $ albedo (0.8, 0.8, 0.9)) (Fuzz 10.0))
+        :<| movingSphere (point3 (400, 400, 200)) (point3 (430, 400, 200)) t0 t1 50 (Lambertian (ConstantColor $ albedo (0.7, 0.3, 0.1)))
+        :<| sphere (point3 (260, 150, 45)) 50 (Dielectric $ RefractiveIdx 1.5)
+        :<| sphere (point3 (0, 150, 145)) 50 (Metal (ConstantColor $ albedo (0.8, 0.8, 0.9)) (Fuzz 10.0))
         :<| boundary1
         :<| constantMedium 0.2 (ConstantColor $ albedo (0.2,0.4,0.9)) boundary1
         :<| constantMedium 0.0001 (ConstantColor $ albedo (1,1,1)) boundary2
-        :<| sphere (Vec3 (400, 200, 400)) 100 (Lambertian earthtex)
-        :<| sphere (Vec3 (220, 280, 300)) 80 (Lambertian pertext)
-        :<| translate (Vec3 (-100, 270, 395)) (rotate YAxis 15 boxes2)
+        :<| sphere (point3 (400, 200, 400)) 100 (Lambertian earthtex)
+        :<| sphere (point3 (220, 280, 300)) 80 (Lambertian pertext)
+        :<| translate (point3 (-100, 270, 395)) (rotate YAxis 15 boxes2)
         :<| Empty)
