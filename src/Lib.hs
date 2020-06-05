@@ -248,8 +248,8 @@ scaleColor :: Double -> Word8
 scaleColor x = floor $ 256 * clamp (0.0, 0.999) (sqrt x)
 
 albedoToColor :: Albedo -> RGB
-albedoToColor (Albedo v) =
-  RGB (scaleColor (vecX v), scaleColor (vecY v), scaleColor (vecZ v))
+albedoToColor (Albedo (Vec3 x y z)) =
+  RGB (scaleColor x, scaleColor y, scaleColor z)
 
 colorToAlbedo :: RGB -> Albedo
 colorToAlbedo (RGB (r, g, b)) =
@@ -353,13 +353,13 @@ perlinGeneratePerm = do
 
 noise :: Texture -> Vec3 -> Double
 noise (Perlin ranvec permX permY permZ sc) p =
-  let p' = scale sc p
-      i = floor (vecX p')
-      j = floor (vecY p')
-      k = floor (vecZ p')
-      u = vecX p' - fromIntegral (floor $ vecX p' :: Int)
-      v = vecY p' - fromIntegral (floor $ vecY p' :: Int)
-      w = vecZ p' - fromIntegral (floor $ vecZ p' :: Int)
+  let (Vec3 pX' pY' pZ') = scale sc p
+      i = floor pX'
+      j = floor pY'
+      k = floor pZ'
+      u = pX' - fromIntegral i
+      v = pY' - fromIntegral j
+      w = pZ' - fromIntegral k
       ds = [(di, dj, dk) | di <- [0, 1], dj <- [0, 1], dk <- [0, 1]]
       rf (di, dj, dk) =
         ranvec VV.!
@@ -527,22 +527,24 @@ rotate axis angle h = Rotate axis sin_theta cos_theta (Box h_min h_max) h
     rad = degreesToRadians angle
     sin_theta = sin rad
     cos_theta = cos rad
-    (Box bbMin bbMax) = boundingBox h Nothing
+    (Box (Vec3 bbMinX bbMinY bbMinZ) (Vec3 bbMaxX bbMaxY bbMaxZ)) =
+      boundingBox h Nothing
     updateMinMax ::
          (Double, Double, Double) -> (Point3, Point3) -> (Point3, Point3)
-    updateMinMax (i, j, k) (minV, maxV) =
-      let x = i * vecX bbMax + (1 - i) * vecX bbMin
-          y = j * vecY bbMax + (1 - j) * vecY bbMin
-          z = k * vecZ bbMax + (1 - k) * vecZ bbMin
-          newV = rotatePoint axis sin_theta cos_theta (point3 (x, y, z))
+    updateMinMax (i, j, k) ((Vec3 minX minY minZ), (Vec3 maxX maxY maxZ)) =
+      let x = i * bbMaxX + (1 - i) * bbMinX
+          y = j * bbMaxY + (1 - j) * bbMinY
+          z = k * bbMaxZ + (1 - k) * bbMinZ
+          Vec3 newX newY newZ =
+            rotatePoint axis sin_theta cos_theta (point3 (x, y, z))
        in ( point3
-              ( min (vecX newV) (vecX minV)
-              , min (vecY newV) (vecY minV)
-              , min (vecZ newV) (vecZ minV))
+              ( min newX minX
+              , min newY minY
+              , min newZ minZ)
           , point3
-              ( max (vecX newV) (vecX maxV)
-              , max (vecY newV) (vecY maxV)
-              , max (vecZ newV) (vecZ maxV)))
+              ( max newX maxX
+              , max newY maxY
+              , max newZ maxZ))
     (h_min, h_max) =
       foldr
         updateMinMax
@@ -551,11 +553,8 @@ rotate axis angle h = Rotate axis sin_theta cos_theta (Box h_min h_max) h
         ([(i, j, k) | i <- [0, 1, 2], j <- [0, 1, 2], k <- [0, 1, 2]])
 
 rotatePoint :: Axis -> Double -> Double -> Point3 -> Point3
-rotatePoint axis sin_theta cos_theta p =
-  let pX = vecX p
-      pY = vecY p
-      pZ = vecZ p
-  in case axis of
+rotatePoint axis sin_theta cos_theta (Vec3 pX pY pZ) =
+  case axis of
     XAxis ->
       point3
         (pX, cos_theta * pY - sin_theta * pZ, sin_theta * pY + cos_theta * pZ)
@@ -567,11 +566,8 @@ rotatePoint axis sin_theta cos_theta p =
         (cos_theta * pX - sin_theta * pY, sin_theta * pX + cos_theta * pY, pZ)
 
 unRotatePoint :: Axis -> Double -> Double -> Point3 -> Point3
-unRotatePoint axis sin_theta cos_theta p =
-  let pX = vecX p
-      pY = vecY p
-      pZ = vecZ p
-  in case axis of
+unRotatePoint axis sin_theta cos_theta (Vec3 pX pY pZ) =
+  case axis of
     XAxis ->
       point3
         (pX, cos_theta * pY + sin_theta * pZ, -sin_theta * pY + cos_theta * pZ)
@@ -592,7 +588,7 @@ data Box = Box
   } deriving (Show)
 
 boxRayIntersect :: Box -> Ray -> Double -> Double -> Bool
-boxRayIntersect (Box minV maxV) (Ray orV drV _) t_min t_max =
+boxRayIntersect (Box (Vec3 minX minY minZ) (Vec3 maxX maxY maxZ)) (Ray (Vec3 orX orY orZ) (Vec3 drX drY drZ) _) t_min t_max =
   all
     (\(ror, rdr, mn, mx) ->
        let ta = (mn - ror) / rdr
@@ -604,9 +600,9 @@ boxRayIntersect (Box minV maxV) (Ray orV drV _) t_min t_max =
            tmin = max t0 t_min
            tmax = min t1 t_max
         in tmax > tmin)
-    [ (vecX orV, vecX drV, vecX minV, vecX maxV)
-    , (vecY orV, vecY drV, vecY minV, vecY maxV)
-    , (vecZ orV, vecZ drV, vecZ minV, vecZ maxV)
+    [ (orX, drX, minX, maxX)
+    , (orY, drY, minY, maxY)
+    , (orZ, drZ, minZ, maxZ)
     ]
 
 type Time = Double
