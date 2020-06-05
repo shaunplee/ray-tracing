@@ -42,8 +42,7 @@ import qualified Data.Sequence                 as S
 import           Data.STRef.Lazy
 import qualified Data.Vector                   as VV (Vector, fromList, (!))
 import           Data.Vector.Unboxed           (Vector, enumFromN, freeze, thaw)
-import qualified Data.Vector.Unboxed           as V (foldr, fromList, map,
-                                                     toList, zipWith, (!))
+import qualified Data.Vector.Unboxed           as V ((!))
 import qualified Data.Vector.Unboxed.Mutable   as MV (swap)
 import           Data.Word                     (Word64, Word8)
 import           System.IO                     (Handle, hPutStr, hPutStrLn,
@@ -183,64 +182,61 @@ instance Show RGB where
 type Point3 = Vec3
 
 point3 :: (Double, Double, Double) -> Point3
-point3 (x, y, z) = Vec3 $ V.fromList [x, y, z]
+point3 (x, y, z) = Vec3 x y z
 
-newtype Vec3 = Vec3 (Vector Double)
+data Vec3 = Vec3 !Double !Double !Double
 
 instance NFData Vec3 where
-  rnf (Vec3 vec) = rnf vec
+  rnf (Vec3 x y z) = rnf x `seq` rnf y `seq` rnf z
 
 vecX :: Vec3 -> Double
-vecX (Vec3 vec) = vec V.! 0
+vecX (Vec3 x _ _) = x
 
 vecY :: Vec3 -> Double
-vecY (Vec3 vec) = vec V.! 1
+vecY (Vec3 _ y _) = y
 
 vecZ :: Vec3 -> Double
-vecZ (Vec3 vec) = vec V.! 2
+vecZ (Vec3 _ _ z) =  z
 
 instance Show Vec3 where
-  show (Vec3 vec) = show vec
+  show (Vec3 x y z) = unwords [show x, show y, show z]
 
 vecMul :: Vec3 -> Vec3 -> Vec3
-vecMul (Vec3 vec1) (Vec3 vec2) = Vec3 (V.zipWith (*) vec1 vec2)
+vecMul (Vec3 x1 y1 z1) (Vec3 x2 y2 z2) = Vec3 (x1 * x2) (y1 * y2) (z1 * z2)
 
 _vecDiv :: Vec3 -> Vec3 -> Vec3
-_vecDiv (Vec3 vec1) (Vec3 vec2) = Vec3 (V.zipWith (/) vec1 vec2)
+_vecDiv (Vec3 x1 y1 z1) (Vec3 x2 y2 z2) = Vec3 (x1 / x2) (y1 / y2) (z1 / z2)
 
 vecAdd :: Vec3 -> Vec3 -> Vec3
-vecAdd (Vec3 vec1) (Vec3 vec2) = Vec3 (V.zipWith (+) vec1 vec2)
+vecAdd (Vec3 x1 y1 z1) (Vec3 x2 y2 z2) = Vec3 (x1 + x2) (y1 + y2) (z1 + z2)
 
 vecSub :: Vec3 -> Vec3 -> Vec3
-vecSub (Vec3 vec1) (Vec3 vec2) = Vec3 (V.zipWith (-) vec1 vec2)
+vecSub (Vec3 x1 y1 z1) (Vec3 x2 y2 z2) = Vec3 (x1 - x2) (y1 - y2) (z1 - z2)
 
 vecNegate :: Vec3 -> Vec3
-vecNegate (Vec3 vec) = Vec3 (V.map negate vec)
+vecNegate (Vec3 x y z) = Vec3 (negate x) (negate y) (negate z)
 
 length :: Vec3 -> Double
 length vec = sqrt (squaredLength vec)
 
 squaredLength :: Vec3 -> Double
-squaredLength (Vec3 vec) = V.foldr (\x acc -> (x * x) + acc) 0 vec
+squaredLength (Vec3 x y z) = (x * x) + (y * y) + (z * z)
 
 makeUnitVector :: Vec3 -> Vec3
 makeUnitVector v = divide v (Lib.length v)
 
 scale :: Double -> Vec3 -> Vec3
-scale k (Vec3 vec) = Vec3 (V.map (* k) vec)
+scale k (Vec3 x y z) = Vec3 (x * k) (y * k) (z * k)
 
 divide :: Vec3 -> Double -> Vec3
-divide (Vec3 vec) k = Vec3 (V.map (/ k) vec)
+divide (Vec3 x y z) k = Vec3 (x / k) (y / k) (z / k)
 
 dot :: Vec3 -> Vec3 -> Double
-dot (Vec3 vec1) (Vec3 vec2) =
-  vec1 V.! 0 * vec2 V.! 0 + vec1 V.! 1 * vec2 V.! 1 + vec1 V.! 2 * vec2 V.! 2
+dot (Vec3 x1 y1 z1) (Vec3 x2 y2 z2) = x1 * x2 + y1 * y2 + z1 * z2
 
 cross :: Vec3 -> Vec3 -> Vec3
-cross (Vec3 vec1) (Vec3 vec2) =
-  let [x1, y1, z1] = V.toList vec1
-      [x2, y2, z2] = V.toList vec2
-  in point3 (y1 * z2 - z1 * y2, z1 * x2 - x1 * z2, x1 * y2 - y1 * x2)
+cross (Vec3 x1 y1 z1) (Vec3 x2 y2 z2) =
+  point3 (y1 * z2 - z1 * y2, z1 * x2 - x1 * z2, x1 * y2 - y1 * x2)
 
 clamp :: (Double, Double) -> Double -> Double
 clamp (mn, mx) x =
@@ -306,7 +302,7 @@ newtype Albedo = Albedo Vec3
   deriving Show
 
 albedo :: (Double, Double, Double) -> Albedo
-albedo (r, g, b) = Albedo $ Vec3 $ V.fromList [r, g, b]
+albedo (r, g, b) = Albedo $ Vec3 r g b
 
 instance NFData Albedo where
   rnf (Albedo v) = rnf v `seq` ()
@@ -473,19 +469,17 @@ movingSphere ::
 movingSphere c0 c1 t0 t1 = MovingSphere c0 c1 t0 t1 (t1 - t0)
 
 cuboid :: Point3 -> Point3 -> Material -> Hittable
-cuboid bmin@(Vec3 vec0) bmax@(Vec3 vec1) mat =
-  let [x0, y0, z0] = V.toList vec0
-      [x1, y1, z1] = V.toList vec1
-   in Cuboid
-        bmin
-        bmax
-        [ XYRect x0 x1 y0 y1 z1 mat
-        , XYRect x0 x1 y0 y1 z0 mat
-        , XZRect x0 x1 z0 z1 y1 mat
-        , XZRect x0 x1 z0 z1 y0 mat
-        , YZRect y0 y1 z0 z1 x1 mat
-        , YZRect y0 y1 z0 z1 x0 mat
-        ]
+cuboid bmin@(Vec3 x0 y0 z0) bmax@(Vec3 x1 y1 z1) mat =
+  Cuboid
+    bmin
+    bmax
+    [ XYRect x0 x1 y0 y1 z1 mat
+    , XYRect x0 x1 y0 y1 z0 mat
+    , XZRect x0 x1 z0 z1 y1 mat
+    , XZRect x0 x1 z0 z1 y0 mat
+    , YZRect y0 y1 z0 z1 x1 mat
+    , YZRect y0 y1 z0 z1 x0 mat
+    ]
 
 data Rectangle
   = XYRect Double   -- | xyrect_x0
@@ -701,11 +695,11 @@ boundingBox (Rotate _ _ _ box _) _ = box
 boundingBox (ConstantMedium _ _ h) mt = boundingBox h mt
 
 surroundingBox :: Box -> Box -> Box
-surroundingBox (Box (Vec3 b0min) (Vec3 b0max)) (Box (Vec3 b1min) (Vec3 b1max)) =
-  let [b0min_x, b0min_y, b0min_z] = V.toList b0min
-      [b0max_x, b0max_y, b0max_z] = V.toList b0max
-      [b1min_x, b1min_y, b1min_z] = V.toList b1min
-      [b1max_x, b1max_y, b1max_z] = V.toList b1max
+surroundingBox (Box b0min b0max) (Box b1min b1max) =
+  let Vec3 b0min_x b0min_y b0min_z = b0min
+      Vec3 b0max_x b0max_y b0max_z = b0max
+      Vec3 b1min_x b1min_y b1min_z = b1min
+      Vec3 b1max_x b1max_y b1max_z = b1max
       small =
         point3 (min b0min_x b1min_x, min b0min_y b1min_y, min b0min_z b1min_z)
       big =
