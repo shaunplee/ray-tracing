@@ -1062,9 +1062,8 @@ sampleColor (Albedo accCol) (u, v) = do
   (Albedo c1) <- rayColor r maxDepth
   return $ Albedo $ accCol `vecAdd` c1
 
-renderPos :: Int -> Int -> Int -> (Int, Int) -> RayTracingM s Albedo
-renderPos nsPerThread imageWidth imageHeight (x, y) = do
-  ns <- asks getNumSamples
+renderPos :: Int -> Int -> Int -> Int -> (Int, Int) -> RayTracingM s Albedo
+renderPos ns nsPerThread imageWidth imageHeight (x, y) = do
   randomUVs <- uniformRandomUVs nsPerThread imageWidth imageHeight (x, y)
   (Albedo summedColor) <-
     foldM
@@ -1093,10 +1092,11 @@ uniformRandomUVs nsPerThread imageWidth imageHeight (x, y) = do
 
 renderRow :: [(Int, Int)] -> RayTracingM s [Albedo]
 renderRow xys = do
+  ns <- asks getNumSamples
   nsPerThread <- asks getNsPerThread
   imageWidth <- asks getImageWidth
   imageHeight <- asks getImageHeight
-  mapM (renderPos nsPerThread imageWidth imageHeight) xys
+  mapM (renderPos ns nsPerThread imageWidth imageHeight) xys
 
 pixelPositions :: Int -> Int -> [[(Int, Int)]]
 pixelPositions nx ny = map (\y -> map (, y) [0 .. nx - 1]) [ny - 1,ny - 2 .. 0]
