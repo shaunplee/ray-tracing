@@ -87,8 +87,7 @@ getStaticImageWidth :: RenderStaticEnv -> Int
 getStaticImageWidth (RenderStaticEnv (_, _, (width, _), _, _, _, _)) = width
 
 getStaticImageHeight :: RenderStaticEnv -> Int
-getStaticImageHeight (RenderStaticEnv (_, _, (_, height), _, _, _, _)) =
-  height
+getStaticImageHeight (RenderStaticEnv (_, _, (_, height), _, _, _, _)) = height
 
 newtype RandGen = RandGen MT.PureMT
   deriving Show
@@ -1055,36 +1054,49 @@ rayColor ray depth = rayColorHelp ray depth id
                     (\(Albedo new) ->
                        alb_acc $ Albedo $ emv `vecAdd` (att `vecMul` new))
 
-sampleColor :: (Int, Int) -> Albedo -> Int -> RayTracingM s Albedo
-sampleColor (x, y) (Albedo accCol) _ = do
-  gRef <- asks getGenRef
-  gen <- lift $ readSTRef gRef
-  maxDepth <- asks getMaxDepth
-  let (ru, g1) = randomDouble gen
-  let (rv, g2) = randomDouble g1
-  imageWidth <- asks getImageWidth
-  imageHeight <- asks getImageHeight
-  let u = (fromIntegral x + ru) / fromIntegral imageWidth
-  let v = (fromIntegral y + rv) / fromIntegral imageHeight
+sampleColor :: Albedo -> (Double, Double) -> RayTracingM s Albedo
+sampleColor (Albedo accCol) (u, v) = do
   camera <- asks getCamera
   r <- getRay camera u v
-  lift $ writeSTRef gRef g2
+  maxDepth <- asks getMaxDepth
   (Albedo c1) <- rayColor r maxDepth
   return $ Albedo $ accCol `vecAdd` c1
 
-renderPos :: (Int, Int) -> RayTracingM s Albedo
-renderPos (x, y) = do
-  nsPerThread <- asks getNsPerThread
+renderPos :: Int -> Int -> Int -> (Int, Int) -> RayTracingM s Albedo
+renderPos nsPerThread imageWidth imageHeight (x, y) = do
   ns <- asks getNumSamples
+  randomUVs <- uniformRandomUVs nsPerThread imageWidth imageHeight (x, y)
   (Albedo summedColor) <-
     foldM
-      (sampleColor (x, y))
+      sampleColor
       (albedo (0.0, 0.0, 0.0))
-      [0 .. nsPerThread - 1]
+      randomUVs
   return $ Albedo $ divide summedColor (fromIntegral ns)
 
+uniformRandomUVs ::
+     Int -> Int -> Int -> (Int, Int) -> RayTracingM s [(Double, Double)]
+uniformRandomUVs nsPerThread imageWidth imageHeight (x, y) = do
+  gRef <- asks getGenRef
+  gen <- lift $ readSTRef gRef
+  let (gFin, res) =
+        foldr
+          (\_ (g, acc) ->
+             let (ru, g1) = randomDouble g
+                 (rv, g2) = randomDouble g1
+                 u = (fromIntegral x + ru) / fromIntegral imageWidth
+                 v = (fromIntegral y + rv) / fromIntegral imageHeight
+              in (g2, (u, v) : acc))
+          (gen, [])
+          [1 .. nsPerThread]
+  lift $ writeSTRef gRef gFin
+  return res
+
 renderRow :: [(Int, Int)] -> RayTracingM s [Albedo]
-renderRow = mapM renderPos
+renderRow xys = do
+  nsPerThread <- asks getNsPerThread
+  imageWidth <- asks getImageWidth
+  imageHeight <- asks getImageHeight
+  mapM (renderPos nsPerThread imageWidth imageHeight) xys
 
 pixelPositions :: Int -> Int -> [[(Int, Int)]]
 pixelPositions nx ny = map (\y -> map (, y) [0 .. nx - 1]) [ny - 1,ny - 2 .. 0]
@@ -1261,7 +1273,7 @@ makeEarthScene earthTex t0 t1 gen =
            (Sphere (point3 (0, 0, 0)) 2 (Lambertian earthTex) :<| Empty))
         (dummyRenderEnv gRef)
     g1 <- readSTRef gRef
-    return ((world, albedo (0, 0, 0)), g1)
+    return ((world, albedo (1.00, 1.00, 1.00)), g1)
 
 twoSpheresSceneCamera :: (Int, Int) -> Camera
 twoSpheresSceneCamera (imageWidth, imageHeight) =
@@ -1313,7 +1325,7 @@ makeTwoSpheresScene t0 t1 gen =
             Empty))
         (dummyRenderEnv gRef)
     g1 <- readSTRef gRef
-    return ((world, albedo (0, 0, 0)), g1)
+    return ((world, albedo (0.8, 0.8, 0.9)), g1)
 
 randomSceneCamera :: (Int, Int) -> Camera
 randomSceneCamera (imageWidth, imageHeight) =
