@@ -91,7 +91,7 @@ getStaticImageHeight (RenderStaticEnv (_, _, (_, height), _, _, _, _)) = height
 
 newtype RandGen = RandGen PCG.FrozenGen
 
-newtype Gen s = Gen (PCG.Gen s)
+newtype Gen s = Gen (PCG.GenST s)
 
 newRandGen :: IO RandGen
 newRandGen = do g <- PCG.createSystemRandom
@@ -888,7 +888,8 @@ randomDouble (RandGen g) =
 randomDoubleM :: RandomState s Double
 randomDoubleM = do
   (Gen pcg) <- asks getGenRef
-  return $ lift $ PCG.uniformD pcg
+  rg <- lift $ PCG.uniformD pcg
+  return rg
 
 randomDoubleRM :: Double -> Double -> RandomState s Double
 randomDoubleRM mn mx = do
@@ -1127,24 +1128,25 @@ parallelRenderRow ::
   -> ST s [Albedo]
 parallelRenderRow rowps staticEnv gsRef = do
   gs <- readSTRef gsRef
-  let (sampleGroups, newGs) = unzip $ parMap
-        rpar
-        (\gen -> force $ runST $ do
-          genRef <- newSTRef gen
-          runReaderT
-            (do
-              row <- renderRow rowps
-              g   <- lift $ readSTRef genRef
-              return (row, g)
-            )
-            (mkRenderEnv staticEnv genRef)
-        )
-        gs
+  let (sampleGroups, newGs) =
+        unzip $
+        parMap
+          rpar
+          (\(RandGen frgen) ->
+             force $
+             runST $
+             runReaderT
+               (do gen <- PCG.restore frgen
+                   row <- renderRow rowps
+                   return (row, Gen gen))
+               (mkRenderEnv staticEnv _))
+          gs
   writeSTRef gsRef newGs
-  return $ foldl'
-    (zipWith (\(Albedo a1) (Albedo a2) -> Albedo $ vecAdd a1 a2))
-    (replicate (getStaticImageWidth staticEnv) (albedo (0.0, 0.0, 0.0)))
-    sampleGroups
+  return $
+    foldl'
+      (zipWith (\(Albedo a1) (Albedo a2) -> Albedo $ vecAdd a1 a2))
+      (replicate (getStaticImageWidth staticEnv) (albedo (0.0, 0.0, 0.0)))
+      sampleGroups
 
 
 -- Scenes
