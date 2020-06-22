@@ -22,32 +22,32 @@ module Lib
     , twoSpheresSceneCamera
     ) where
 
-import qualified Codec.Picture                 as JP (Image (..),
-                                                      PixelRGB8 (..),
-                                                      convertRGB8, imageHeight,
-                                                      imageWidth, pixelAt,
-                                                      readImage)
-import           Control.Applicative           ((<$>))
-import           Control.DeepSeq               (NFData, force, rnf)
-import           Control.Monad                 (foldM)
+import qualified Codec.Picture               as JP (Image (..), PixelRGB8 (..),
+                                                    convertRGB8, imageHeight,
+                                                    imageWidth, pixelAt,
+                                                    readImage)
+import           Control.Applicative         ((<$>))
+import           Control.DeepSeq             (NFData, force, rnf)
+import           Control.Monad               (foldM)
 import           Control.Monad.Reader
-import           Control.Monad.ST.Lazy         (ST, runST, strictToLazyST)
-import           Control.Monad.Trans           (lift)
-import           Control.Parallel.Strategies   (parMap, rpar)
-import           Data.Bits                     (xor)
-import           Data.Foldable                 (foldl')
-import           Data.Maybe                    (catMaybes)
-import           Data.Sequence                 (Seq (..))
-import qualified Data.Sequence                 as S
+import           Control.Monad.ST.Lazy       (ST, runST, strictToLazyST)
+import           Control.Monad.Trans         (lift)
+import           Control.Parallel.Strategies (parMap, rpar)
+import           Data.Bits                   (xor)
+import           Data.Foldable               (foldl')
+import           Data.Maybe                  (catMaybes)
+import           Data.Sequence               (Seq (..))
+import qualified Data.Sequence               as S
 import           Data.STRef.Lazy
-import qualified Data.Vector                   as VV (Vector, fromList, (!))
-import           Data.Vector.Unboxed           (Vector, enumFromN, freeze, thaw)
-import qualified Data.Vector.Unboxed           as V ((!))
-import qualified Data.Vector.Unboxed.Mutable   as MV (swap)
-import           Data.Word                     (Word64, Word8)
-import           System.IO                     (Handle, hPutStr, hPutStrLn,
-                                                stderr)
-import qualified System.Random.Mersenne.Pure64 as MT
+import qualified Data.Vector                 as VV (Vector, fromList, (!))
+import           Data.Vector.Unboxed         (Vector, enumFromN, freeze, thaw)
+import qualified Data.Vector.Unboxed         as V ((!))
+import qualified Data.Vector.Unboxed.Mutable as MV (swap)
+import           Data.Word                   (Word64, Word8)
+import           System.IO                   (Handle, hPutStr, hPutStrLn,
+                                              stderr)
+-- import qualified System.Random.Mersenne.Pure64 as MT
+import qualified System.Random.PCG           as PCG
 
 -- Epsilon (some smallish number)
 epsilon :: Double
@@ -89,14 +89,15 @@ getStaticImageWidth (RenderStaticEnv (_, _, (width, _), _, _, _, _)) = width
 getStaticImageHeight :: RenderStaticEnv -> Int
 getStaticImageHeight (RenderStaticEnv (_, _, (_, height), _, _, _, _)) = height
 
-newtype RandGen = RandGen MT.PureMT
-  deriving Show
+newtype RandGen = RandGen PCG.FrozenGen
 
 newRandGen :: IO RandGen
-newRandGen = RandGen <$> MT.newPureMT
+newRandGen = do g <- PCG.createSystemRandom
+                fg <- PCG.save g
+                return $ RandGen fg
 
-randGen :: Word64 -> RandGen
-randGen s = RandGen (MT.pureMT s)
+randGen :: Word64 -> Word64 -> RandGen
+randGen s1 s2 = RandGen (PCG.initFrozen s1 s2)
 
 newtype RenderEnv s =
   RenderEnv ( RenderStaticEnv
@@ -879,7 +880,7 @@ faceNormal (Ray _ rdr _) outwardNormal =
 
 randomDouble :: RandGen -> (Double, RandGen)
 randomDouble (RandGen g) =
-  let (x, g1) = MT.randomDouble g
+  let (x, g1) = PCG.withFrozen g PCG.uniformD
    in (x, RandGen g1)
 
 randomDoubleM :: RandomState s Double
