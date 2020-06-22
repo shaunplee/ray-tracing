@@ -1062,21 +1062,50 @@ sampleColor (Albedo accCol) (u, v) = do
   (Albedo c1) <- rayColor r maxDepth
   return $ Albedo $ accCol `vecAdd` c1
 
-renderPos :: Int -> Int -> Int -> Int -> (Int, Int) -> RayTracingM s Albedo
-renderPos ns nsPerThread imageWidth imageHeight (x, y) = do
-  randomUVs <- uniformRandomUVs nsPerThread imageWidth imageHeight (x, y)
-  (Albedo summedColor) <-
-    foldM
-      sampleColor
-      (albedo (0.0, 0.0, 0.0))
-      randomUVs
-  return $ Albedo $ divide summedColor (fromIntegral ns)
+parallelRenderPos ::
+     RenderStaticEnv -> STRef s [RandGen] -> (Int, Int) -> ST s Albedo
+parallelRenderPos staticEnv gsRef (x, y) =
+  let env = mkRenderEnv staticEnv undefined
+      ns = getNumSamples env
+      nsPerThread = getNsPerThread env
+      imageWidth = getImageWidth env
+      imageHeight = getImageHeight env
+   in do uvs <- uniformRandomUVs ns imageWidth imageHeight (x, y) gsRef
+         gs <- readSTRef gsRef
+         let (albedos, newGs) =
+               unzip $
+               parMap
+                 rpar
+                 (\(gen, samples) ->
+                    force $
+                    runST $ do
+                      genRef <- newSTRef gen
+                      runReaderT
+                        (do (Albedo summedColor) <-
+                              foldM sampleColor (albedo (0.0, 0.0, 0.0)) samples
+                            g <- lift $ readSTRef genRef
+                            return
+                              (Albedo $ divide summedColor (fromIntegral ns), g))
+                        (mkRenderEnv staticEnv genRef))
+                 (zip gs (divideList nsPerThread uvs))
+         writeSTRef gsRef newGs
+         return $
+           foldl'
+             (\(Albedo a1) (Albedo a2) -> Albedo (vecAdd a1 a2))
+             (albedo (0.0, 0.0, 0.0))
+             albedos
+
+divideList :: Int -> [a] -> [[a]]
+divideList n xs =
+  let (x, y) = splitAt n xs
+   in if null y
+        then [x]
+        else x : divideList n y
 
 uniformRandomUVs ::
-     Int -> Int -> Int -> (Int, Int) -> RayTracingM s [(Double, Double)]
-uniformRandomUVs nsPerThread imageWidth imageHeight (x, y) = do
-  gRef <- asks getGenRef
-  gen <- lift $ readSTRef gRef
+     Int -> Int -> Int -> (Int, Int) -> STRef s [RandGen] -> ST s [(Double, Double)]
+uniformRandomUVs nsPerThread imageWidth imageHeight (x, y) gsRef = do
+  (gen:gs) <- readSTRef gsRef
   let (gFin, res) =
         foldr
           (\_ (g, acc) ->
@@ -1087,16 +1116,8 @@ uniformRandomUVs nsPerThread imageWidth imageHeight (x, y) = do
               in (g2, (u, v) : acc))
           (gen, [])
           [1 .. nsPerThread]
-  lift $ writeSTRef gRef gFin
+  writeSTRef gsRef (gFin : gs)
   return res
-
-renderRow :: [(Int, Int)] -> RayTracingM s [Albedo]
-renderRow xys = do
-  ns <- asks getNumSamples
-  nsPerThread <- asks getNsPerThread
-  imageWidth <- asks getImageWidth
-  imageHeight <- asks getImageHeight
-  mapM (renderPos ns nsPerThread imageWidth imageHeight) xys
 
 pixelPositions :: Int -> Int -> [[(Int, Int)]]
 pixelPositions nx ny = map (\y -> map (, y) [0 .. nx - 1]) [ny - 1,ny - 2 .. 0]
@@ -1109,40 +1130,10 @@ runRender staticEnv gens =
    in runST $ do
         gensRef <- newSTRef gens
         mapM
-          (\rowPs ->
-             map albedoToColor <$>
-             parallelRenderRow
-               rowPs
-               staticEnv
-               gensRef)
+          (fmap
+             (map albedoToColor) .
+             mapM (parallelRenderPos staticEnv gensRef))
           pp
-
-parallelRenderRow ::
-     [(Int, Int)]
-  -> RenderStaticEnv
-  -> STRef s [RandGen]
-  -> ST s [Albedo]
-parallelRenderRow rowps staticEnv gsRef = do
-  gs <- readSTRef gsRef
-  let (sampleGroups, newGs) = unzip $ parMap
-        rpar
-        (\gen -> force $ runST $ do
-          genRef <- newSTRef gen
-          runReaderT
-            (do
-              row <- renderRow rowps
-              g   <- lift $ readSTRef genRef
-              return (row, g)
-            )
-            (mkRenderEnv staticEnv genRef)
-        )
-        gs
-  writeSTRef gsRef newGs
-  return $ foldl'
-    (zipWith (\(Albedo a1) (Albedo a2) -> Albedo $ vecAdd a1 a2))
-    (replicate (getStaticImageWidth staticEnv) (albedo (0.0, 0.0, 0.0)))
-    sampleGroups
-
 
 -- Scenes
 
