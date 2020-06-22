@@ -28,11 +28,12 @@ main = do
   let imageHeight = defaultImageHeight
   let gen = randGen 1024 -- Fix a seed for comparable performance tests
   et <- earthTexture
-  let camera = randomSceneCamera (imageWidth, imageHeight)
-  let (world, g1) = makeRandomScene et 0.0 1.0 gen
-  --let camera = twoSpheresSceneCamera (imageWidth, imageHeight)
+  -- let camera = randomSceneCamera (imageWidth, imageHeight)
+  -- let (world, g1) = makeRandomScene et 0.0 1.0 gen
+  let camera = twoSpheresSceneCamera (imageWidth, imageHeight)
   --let (world, g1) = makeEarthScene et 0.0 1.0 gen
   --let (world, g1) = makeTwoPerlinSpheresScene 0.0 1.0 gen
+  let (world, g1) = makeTwoSpheresScene 0.0 1.0 gen
   --let (world, g1) = makeSimpleLightScene 0.0 1.0 gen
   --let camera = cornellCamera (imageWidth, imageHeight)
   --let (world, g1) = makeCornellBoxScene 0.0 1.0 gen
