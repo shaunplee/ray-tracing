@@ -91,6 +91,8 @@ getStaticImageHeight (RenderStaticEnv (_, _, (_, height), _, _, _, _)) = height
 
 newtype RandGen = RandGen PCG.FrozenGen
 
+newtype Gen s = Gen (PCG.Gen s)
+
 newRandGen :: IO RandGen
 newRandGen = do g <- PCG.createSystemRandom
                 fg <- PCG.save g
@@ -101,9 +103,9 @@ randGen s1 s2 = RandGen (PCG.initFrozen s1 s2)
 
 newtype RenderEnv s =
   RenderEnv ( RenderStaticEnv
-            , STRef s RandGen)
+            , Gen s)
 
-mkRenderEnv :: RenderStaticEnv -> STRef s RandGen -> RenderEnv s
+mkRenderEnv :: RenderStaticEnv -> Gen s -> RenderEnv s
 mkRenderEnv renderStaticEnv g =
   RenderEnv
     ( renderStaticEnv
@@ -132,7 +134,7 @@ dummyRenderStaticEnv =
         , albedo (0, 0, 0))
    in mkRenderStaticEnv world dummyCamera (0, 0) 0 0 0
 
-dummyRenderEnv :: STRef s RandGen -> RenderEnv s
+dummyRenderEnv :: Gen s -> RenderEnv s
 dummyRenderEnv = mkRenderEnv dummyRenderStaticEnv
 
 getSceneHittables :: RenderEnv s -> Hittable
@@ -164,7 +166,7 @@ getNsPerThread :: RenderEnv s -> Int
 getNsPerThread (RenderEnv (RenderStaticEnv (_, _, _, _, _, _, nsPerThread), _))
   = nsPerThread
 
-getGenRef :: RenderEnv s -> STRef s RandGen
+getGenRef :: RenderEnv s -> Gen s
 getGenRef (RenderEnv (_, genRef)) = genRef
 
 instance NFData RandGen where
@@ -885,11 +887,8 @@ randomDouble (RandGen g) =
 
 randomDoubleM :: RandomState s Double
 randomDoubleM = do
-  gRef <- asks getGenRef
-  g1 <- lift $ readSTRef gRef
-  let (x, g2) = randomDouble g1
-  lift $ writeSTRef gRef g2
-  return x
+  (Gen pcg) <- asks getGenRef
+  return $ lift $ PCG.uniformD pcg
 
 randomDoubleRM :: Double -> Double -> RandomState s Double
 randomDoubleRM mn mx = do
@@ -901,12 +900,15 @@ randomIntRM lo hi = floor <$> randomDoubleRM (fromIntegral lo) (fromIntegral hi)
 
 randomVec3DoubleM :: RandomState s Vec3
 randomVec3DoubleM = do
-  gRef <- asks getGenRef
-  gen <- lift $ readSTRef gRef
-  let (x, g1) = randomDouble gen
-  let (y, g2) = randomDouble g1
-  let (z, g3) = randomDouble g2
-  lift $ writeSTRef gRef g3
+  -- gRef <- asks getGenRef
+  -- gen <- lift $ readSTRef gRef
+  -- let (x, g1) = randomDouble gen
+  -- let (y, g2) = randomDouble g1
+  -- let (z, g3) = randomDouble g2
+  -- lift $ writeSTRef gRef g3
+  x <- randomDoubleM
+  y <- randomDoubleM
+  z <- randomDoubleM
   return $ point3 (x, y, z)
 
 randomVec3DoubleRM :: Double -> Double -> RandomState s Vec3
