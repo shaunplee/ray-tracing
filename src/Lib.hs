@@ -177,6 +177,9 @@ newtype RGB = RGB (Word8, Word8, Word8)
 instance Show RGB where
   show (RGB (r, g, b)) = unwords [show r, show g, show b]
 
+instance NFData RGB where
+  rnf ((RGB (r, g, b))) = rnf r `seq` rnf g `seq` rnf b
+
 -- General 3-dimensional Doubles--could be color or vector or position
 type Point3 = Vec3
 
@@ -1062,33 +1065,32 @@ sampleColor (Albedo accCol) (u, v) = do
   (Albedo c1) <- rayColor r maxDepth
   return $ Albedo $ accCol `vecAdd` c1
 
+renderPos :: RenderStaticEnv -> STRef s RandGen -> [(Double, Double)] -> ST s Albedo
+renderPos staticEnv genRef samples =
+  let ns = getNumSamples (mkRenderEnv staticEnv undefined)
+   in runReaderT
+        (do (Albedo summedColor) <-
+              foldM sampleColor (albedo (0.0, 0.0, 0.0)) samples
+            return $ Albedo $ divide summedColor (fromIntegral ns))
+        (mkRenderEnv staticEnv genRef)
+
 parallelRenderPos
   :: RenderStaticEnv -> STRef s [RandGen] -> [(Double, Double)] -> ST s Albedo
 parallelRenderPos staticEnv gsRef uvs =
   let
     env         = mkRenderEnv staticEnv undefined
-    ns          = getNumSamples env
     nsPerThread = getNsPerThread env
   in
     do
       gs  <- readSTRef gsRef
       let
-        (albedos, newGs) = unzip $ parMap
+        albedos = parMap
           rpar
           (\(gen, samples) -> force $ runST $ do
             genRef <- newSTRef gen
-            runReaderT
-              (do
-                (Albedo summedColor) <- foldM sampleColor
-                                              (albedo (0.0, 0.0, 0.0))
-                                              samples
-                g <- lift $ readSTRef genRef
-                return (Albedo $ divide summedColor (fromIntegral ns), g)
-              )
-              (mkRenderEnv staticEnv genRef)
+            renderPos staticEnv genRef samples
           )
           (zip gs (divideList nsPerThread uvs))
-      writeSTRef gsRef newGs
       return $ foldl' (\(Albedo a1) (Albedo a2) -> Albedo (vecAdd a1 a2))
                       (albedo (0.0, 0.0, 0.0))
                       albedos
@@ -1101,9 +1103,9 @@ divideList n xs =
         else x : divideList n y
 
 uniformRandomUVs ::
-     Int -> Int -> Int -> (Int, Int) -> STRef s [RandGen] -> ST s [(Double, Double)]
-uniformRandomUVs nsPerThread imageWidth imageHeight (x, y) gsRef = do
-  (gen:gs) <- readSTRef gsRef
+     Int -> Int -> Int -> (STRef s RandGen, (Int, Int)) -> ST s [(Double, Double)]
+uniformRandomUVs nsPerThread imageWidth imageHeight (gRef, (x, y)) = do
+  gen <- readSTRef gRef
   let (gFin, res) =
         foldr
           (\_ (g, acc) ->
@@ -1114,7 +1116,7 @@ uniformRandomUVs nsPerThread imageWidth imageHeight (x, y) gsRef = do
               in (g2, (u, v) : acc))
           (gen, [])
           [1 .. nsPerThread]
-  writeSTRef gsRef (gFin : gs)
+  writeSTRef gRef gFin
   return res
 
 pixelPositions :: Int -> Int -> [[(Int, Int)]]
@@ -1126,15 +1128,33 @@ runRender staticEnv gens =
       imageHeight = getStaticImageHeight staticEnv
       ns = getNumSamples (mkRenderEnv staticEnv undefined)
       pp = pixelPositions imageWidth imageHeight
-   in runST $ do
-        gensRef <- newSTRef gens
-        mapM
-          (fmap (map albedoToColor) .
-           mapM
-             (\pos -> do
-                uvs <- uniformRandomUVs ns imageWidth imageHeight pos gensRef
-                parallelRenderPos staticEnv gensRef uvs))
-          pp
+   in fst $
+      foldr
+        (\row (acc, gs) ->
+           let (renderedRow, newGs) =
+                 unzip
+                   (parMap
+                      rpar
+                      (\(g, pos) ->
+                         force $
+                         runST $ do
+                           gRef <- newSTRef g
+                           uvs <-
+                             uniformRandomUVs
+                               ns
+                               imageWidth
+                               imageHeight
+                               (gRef, pos)
+                           rendered <-
+                             fmap
+                               albedoToColor
+                               (renderPos staticEnv gRef uvs)
+                           newG <- readSTRef gRef
+                           return (rendered, newG))
+                      (zip gs row))
+            in (renderedRow : acc, newGs))
+        ([], gens)
+        pp
 
 -- Scenes
 
