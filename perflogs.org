@@ -96,3 +96,21 @@ ________________________________________________________
 Executed in   19.69 mins   fish           external
    usr time  1162.38 secs  180.00 micros  1162.38 secs
    sys time   24.91 secs  1137.00 micros   24.91 secs
+* Random-1.1
+❯ time stack run -- +RTS -N2 > twoSpheresRandom8.8Random1.1.ppm
+Rendering row 400 of 400
+Done.
+
+________________________________________________________
+Executed in  139.78 secs   fish           external
+   usr time  270.08 secs  163.00 micros  270.08 secs
+   sys time    5.09 secs  1078.00 micros    5.09 secs
+* Random-1.2
+❯ time stack run -- +RTS -N2 > twoSpheresRandom8.8Random1.2.ppm
+Rendering row 400 of 400
+Done.
+
+________________________________________________________
+Executed in   45.43 secs   fish           external
+   usr time   85.24 secs  162.00 micros   85.24 secs
+   sys time    2.43 secs  1118.00 micros    2.43 secs
