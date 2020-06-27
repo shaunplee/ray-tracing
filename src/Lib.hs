@@ -1124,36 +1124,31 @@ pixelPositions nx ny = map (\y -> map (, y) [0 .. nx - 1]) [ny - 1,ny - 2 .. 0]
 
 runRender :: RenderStaticEnv -> [RandGen] -> [[RGB]]
 runRender staticEnv gens =
-  let imageWidth = getStaticImageWidth staticEnv
-      imageHeight = getStaticImageHeight staticEnv
-      ns = getNumSamples (mkRenderEnv staticEnv undefined)
-      pp = pixelPositions imageWidth imageHeight
-   in fst $
-      foldr
-        (\row (acc, gs) ->
-           let (renderedRow, newGs) =
-                 unzip
-                   (parMap
-                      rpar
-                      (\(g, pos) ->
-                         force $
-                         runST $ do
-                           gRef <- newSTRef g
-                           uvs <-
-                             uniformRandomUVs
-                               ns
-                               imageWidth
-                               imageHeight
-                               (gRef, pos)
-                           rendered <-
-                             fmap
-                               albedoToColor
-                               (renderPos staticEnv gRef uvs)
-                           newG <- readSTRef gRef
-                           return (rendered, newG))
-                      (zip gs row))
-            in (renderedRow : acc, newGs))
-        ([], gens)
+  let
+    imageWidth  = getStaticImageWidth staticEnv
+    imageHeight = getStaticImageHeight staticEnv
+    ns          = getNumSamples (mkRenderEnv staticEnv undefined)
+    pp          = pixelPositions imageWidth imageHeight
+  in
+    runST $ do
+      gensRef <- newSTRef gens
+      mapM
+        (\row -> do
+          gs <- readSTRef gensRef
+          let
+            (renderedRow, newGs) = unzip $ parMap
+              rpar
+              (\(g, pos) -> force $ runST $ do
+                gRef        <- newSTRef g
+                uvs <- uniformRandomUVs ns imageWidth imageHeight (gRef, pos)
+                renderedPos <- fmap albedoToColor (renderPos staticEnv gRef uvs)
+                ng          <- readSTRef gRef
+                return (renderedPos, ng)
+              )
+              (zip gs row)
+          writeSTRef gensRef newGs
+          return renderedRow
+        )
         pp
 
 -- Scenes
