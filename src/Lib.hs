@@ -35,7 +35,6 @@ import           Control.Monad.ST.Lazy         (ST, runST, strictToLazyST)
 import           Control.Monad.Trans           (lift)
 import           Control.Parallel.Strategies   (parMap, rpar)
 import           Data.Bits                     (xor)
-import           Data.Foldable                 (foldl')
 import           Data.Maybe                    (catMaybes)
 import           Data.Sequence                 (Seq (..))
 import qualified Data.Sequence                 as S
@@ -145,11 +144,11 @@ getBackground (RenderEnv (RenderStaticEnv ((_, bkgd), _, _, _, _, _, _), _)) =
 getCamera :: RenderEnv s -> Camera
 getCamera (RenderEnv (RenderStaticEnv (_, cam, _, _, _, _, _), _)) = cam
 
-getImageWidth :: RenderEnv s -> Int
-getImageWidth (RenderEnv (staticEnv, _)) = getStaticImageWidth staticEnv
+_getImageWidth :: RenderEnv s -> Int
+_getImageWidth (RenderEnv (staticEnv, _)) = getStaticImageWidth staticEnv
 
-getImageHeight :: RenderEnv s -> Int
-getImageHeight (RenderEnv (staticEnv, _)) = getStaticImageHeight staticEnv
+_getImageHeight :: RenderEnv s -> Int
+_getImageHeight (RenderEnv (staticEnv, _)) = getStaticImageHeight staticEnv
 
 getNumSamples :: RenderEnv s -> Int
 getNumSamples (RenderEnv (RenderStaticEnv (_, _, _, numSamples, _, _, _), _)) =
@@ -159,8 +158,8 @@ getMaxDepth :: RenderEnv s -> Int
 getMaxDepth (RenderEnv (RenderStaticEnv (_, _, _, _, maxDepth, _, _), _)) =
   maxDepth
 
-getNsPerThread :: RenderEnv s -> Int
-getNsPerThread (RenderEnv (RenderStaticEnv (_, _, _, _, _, _, nsPerThread), _))
+_getNsPerThread :: RenderEnv s -> Int
+_getNsPerThread (RenderEnv (RenderStaticEnv (_, _, _, _, _, _, nsPerThread), _))
   = nsPerThread
 
 getGenRef :: RenderEnv s -> STRef s RandGen
@@ -178,7 +177,7 @@ instance Show RGB where
   show (RGB (r, g, b)) = unwords [show r, show g, show b]
 
 instance NFData RGB where
-  rnf ((RGB (r, g, b))) = rnf r `seq` rnf g `seq` rnf b
+  rnf (RGB (r, g, b)) = rnf r `seq` rnf g `seq` rnf b
 
 -- General 3-dimensional Doubles--could be color or vector or position
 type Point3 = Vec3
@@ -1074,48 +1073,24 @@ renderPos staticEnv genRef samples =
             return $ Albedo $ divide summedColor (fromIntegral ns))
         (mkRenderEnv staticEnv genRef)
 
-parallelRenderPos
-  :: RenderStaticEnv -> STRef s [RandGen] -> [(Double, Double)] -> ST s Albedo
-parallelRenderPos staticEnv gsRef uvs =
-  let
-    env         = mkRenderEnv staticEnv undefined
-    nsPerThread = getNsPerThread env
-  in
-    do
-      gs  <- readSTRef gsRef
-      let
-        albedos = parMap
-          rpar
-          (\(gen, samples) -> force $ runST $ do
-            genRef <- newSTRef gen
-            renderPos staticEnv genRef samples
-          )
-          (zip gs (divideList nsPerThread uvs))
-      return $ foldl' (\(Albedo a1) (Albedo a2) -> Albedo (vecAdd a1 a2))
-                      (albedo (0.0, 0.0, 0.0))
-                      albedos
-
-divideList :: Int -> [a] -> [[a]]
-divideList n xs =
-  let (x, y) = splitAt n xs
-   in if null y
-        then [x]
-        else x : divideList n y
-
-uniformRandomUVs ::
-     Int -> Int -> Int -> (STRef s RandGen, (Int, Int)) -> ST s [(Double, Double)]
+uniformRandomUVs
+  :: Int
+  -> Int
+  -> Int
+  -> (STRef s RandGen, (Int, Int))
+  -> ST s [(Double, Double)]
 uniformRandomUVs nsPerThread imageWidth imageHeight (gRef, (x, y)) = do
   gen <- readSTRef gRef
-  let (gFin, res) =
-        foldr
-          (\_ (g, acc) ->
-             let (ru, g1) = randomDouble g
-                 (rv, g2) = randomDouble g1
-                 u = (fromIntegral x + ru) / fromIntegral imageWidth
-                 v = (fromIntegral y + rv) / fromIntegral imageHeight
-              in (g2, (u, v) : acc))
-          (gen, [])
-          [1 .. nsPerThread]
+  let (gFin, res) = foldr
+        (\_ (g, acc) ->
+          let (ru, g1) = randomDouble g
+              (rv, g2) = randomDouble g1
+              u        = (fromIntegral x + ru) / fromIntegral imageWidth
+              v        = (fromIntegral y + rv) / fromIntegral imageHeight
+          in  (g2, (u, v) : acc)
+        )
+        (gen, [])
+        [1 .. nsPerThread]
   writeSTRef gRef gFin
   return res
 
