@@ -29,8 +29,8 @@ library:
     - deepseq
     - JuicyPixels
     - mtl
-    - mersenne-random-pure64
     - parallel
+    - random
     - transformers
     - vector
 
