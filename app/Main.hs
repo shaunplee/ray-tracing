@@ -42,7 +42,8 @@ main = do
   -- let imageHeight = 500
   -- let camera = nextWeekFinalSceneCamera (imageWidth, imageHeight)
   -- let (world, g1) = makeNextWeekFinalScene et 0.0 1.0 gen
-  gs <- replicateM (defaultnThreads - 1) newRandGen
+  -- gs <- replicateM (defaultnThreads - 1) newRandGen
+  gs <- replicateM (defaultImageWidth - 1) newRandGen
   let gens = g1 : gs
   let staticEnv =
         mkRenderStaticEnv
@@ -51,7 +52,7 @@ main = do
           (imageWidth, imageHeight)
           defaultNs
           defaultMaxDepth
-          (length gens)
+          defaultnThreads
   let vals = runRender staticEnv gens
   putStrLn "P3"
   putStrLn $ show imageWidth ++ " " ++ show imageHeight

@@ -35,7 +35,6 @@ import           Control.Monad.ST.Lazy         (ST, runST, strictToLazyST)
 import           Control.Monad.Trans           (lift)
 import           Control.Parallel.Strategies   (parMap, rpar)
 import           Data.Bits                     (xor)
-import           Data.Foldable                 (foldl')
 import           Data.Maybe                    (catMaybes)
 import           Data.Sequence                 (Seq (..))
 import qualified Data.Sequence                 as S
@@ -145,11 +144,11 @@ getBackground (RenderEnv (RenderStaticEnv ((_, bkgd), _, _, _, _, _, _), _)) =
 getCamera :: RenderEnv s -> Camera
 getCamera (RenderEnv (RenderStaticEnv (_, cam, _, _, _, _, _), _)) = cam
 
-getImageWidth :: RenderEnv s -> Int
-getImageWidth (RenderEnv (staticEnv, _)) = getStaticImageWidth staticEnv
+_getImageWidth :: RenderEnv s -> Int
+_getImageWidth (RenderEnv (staticEnv, _)) = getStaticImageWidth staticEnv
 
-getImageHeight :: RenderEnv s -> Int
-getImageHeight (RenderEnv (staticEnv, _)) = getStaticImageHeight staticEnv
+_getImageHeight :: RenderEnv s -> Int
+_getImageHeight (RenderEnv (staticEnv, _)) = getStaticImageHeight staticEnv
 
 getNumSamples :: RenderEnv s -> Int
 getNumSamples (RenderEnv (RenderStaticEnv (_, _, _, numSamples, _, _, _), _)) =
@@ -159,8 +158,8 @@ getMaxDepth :: RenderEnv s -> Int
 getMaxDepth (RenderEnv (RenderStaticEnv (_, _, _, _, maxDepth, _, _), _)) =
   maxDepth
 
-getNsPerThread :: RenderEnv s -> Int
-getNsPerThread (RenderEnv (RenderStaticEnv (_, _, _, _, _, _, nsPerThread), _))
+_getNsPerThread :: RenderEnv s -> Int
+_getNsPerThread (RenderEnv (RenderStaticEnv (_, _, _, _, _, _, nsPerThread), _))
   = nsPerThread
 
 getGenRef :: RenderEnv s -> STRef s RandGen
@@ -176,6 +175,9 @@ newtype RGB = RGB (Word8, Word8, Word8)
 
 instance Show RGB where
   show (RGB (r, g, b)) = unwords [show r, show g, show b]
+
+instance NFData RGB where
+  rnf (RGB (r, g, b)) = rnf r `seq` rnf g `seq` rnf b
 
 -- General 3-dimensional Doubles--could be color or vector or position
 type Point3 = Vec3
@@ -530,7 +532,7 @@ rotate axis angle h = Rotate axis sin_theta cos_theta (Box h_min h_max) h
       boundingBox h Nothing
     updateMinMax ::
          (Double, Double, Double) -> (Point3, Point3) -> (Point3, Point3)
-    updateMinMax (i, j, k) ((Vec3 minX minY minZ), (Vec3 maxX maxY maxZ)) =
+    updateMinMax (i, j, k) (Vec3 minX minY minZ, Vec3 maxX maxY maxZ) =
       let x = i * bbMaxX + (1 - i) * bbMinX
           y = j * bbMaxY + (1 - j) * bbMinY
           z = k * bbMaxZ + (1 - k) * bbMinZ
@@ -549,7 +551,7 @@ rotate axis angle h = Rotate axis sin_theta cos_theta (Box h_min h_max) h
         updateMinMax
         ( point3 (infinity, infinity, infinity)
         , point3 (-infinity, -infinity, -infinity))
-        ([(i, j, k) | i <- [0, 1, 2], j <- [0, 1, 2], k <- [0, 1, 2]])
+        [(i, j, k) | i <- [0, 1, 2], j <- [0, 1, 2], k <- [0, 1, 2]]
 
 rotatePoint :: Axis -> Double -> Double -> Point3 -> Point3
 rotatePoint axis sin_theta cos_theta (Vec3 pX pY pZ) =
@@ -1062,87 +1064,67 @@ sampleColor (Albedo accCol) (u, v) = do
   (Albedo c1) <- rayColor r maxDepth
   return $ Albedo $ accCol `vecAdd` c1
 
-renderPos :: Int -> Int -> Int -> Int -> (Int, Int) -> RayTracingM s Albedo
-renderPos ns nsPerThread imageWidth imageHeight (x, y) = do
-  randomUVs <- uniformRandomUVs nsPerThread imageWidth imageHeight (x, y)
-  (Albedo summedColor) <-
-    foldM
-      sampleColor
-      (albedo (0.0, 0.0, 0.0))
-      randomUVs
-  return $ Albedo $ divide summedColor (fromIntegral ns)
+renderPos :: RenderStaticEnv -> STRef s RandGen -> [(Double, Double)] -> ST s Albedo
+renderPos staticEnv genRef samples =
+  let ns = getNumSamples (mkRenderEnv staticEnv undefined)
+   in runReaderT
+        (do (Albedo summedColor) <-
+              foldM sampleColor (albedo (0.0, 0.0, 0.0)) samples
+            return $ Albedo $ divide summedColor (fromIntegral ns))
+        (mkRenderEnv staticEnv genRef)
 
-uniformRandomUVs ::
-     Int -> Int -> Int -> (Int, Int) -> RayTracingM s [(Double, Double)]
-uniformRandomUVs nsPerThread imageWidth imageHeight (x, y) = do
-  gRef <- asks getGenRef
-  gen <- lift $ readSTRef gRef
-  let (gFin, res) =
-        foldr
-          (\_ (g, acc) ->
-             let (ru, g1) = randomDouble g
-                 (rv, g2) = randomDouble g1
-                 u = (fromIntegral x + ru) / fromIntegral imageWidth
-                 v = (fromIntegral y + rv) / fromIntegral imageHeight
-              in (g2, (u, v) : acc))
-          (gen, [])
-          [1 .. nsPerThread]
-  lift $ writeSTRef gRef gFin
+uniformRandomUVs
+  :: Int
+  -> Int
+  -> Int
+  -> (STRef s RandGen, (Int, Int))
+  -> ST s [(Double, Double)]
+uniformRandomUVs nsPerThread imageWidth imageHeight (gRef, (x, y)) = do
+  gen <- readSTRef gRef
+  let (gFin, res) = foldr
+        (\_ (g, acc) ->
+          let (ru, g1) = randomDouble g
+              (rv, g2) = randomDouble g1
+              u        = (fromIntegral x + ru) / fromIntegral imageWidth
+              v        = (fromIntegral y + rv) / fromIntegral imageHeight
+          in  (g2, (u, v) : acc)
+        )
+        (gen, [])
+        [1 .. nsPerThread]
+  writeSTRef gRef gFin
   return res
-
-renderRow :: [(Int, Int)] -> RayTracingM s [Albedo]
-renderRow xys = do
-  ns <- asks getNumSamples
-  nsPerThread <- asks getNsPerThread
-  imageWidth <- asks getImageWidth
-  imageHeight <- asks getImageHeight
-  mapM (renderPos ns nsPerThread imageWidth imageHeight) xys
 
 pixelPositions :: Int -> Int -> [[(Int, Int)]]
 pixelPositions nx ny = map (\y -> map (, y) [0 .. nx - 1]) [ny - 1,ny - 2 .. 0]
 
 runRender :: RenderStaticEnv -> [RandGen] -> [[RGB]]
 runRender staticEnv gens =
-  let imageWidth = getStaticImageWidth staticEnv
-      imageHeight = getStaticImageHeight staticEnv
-      pp = pixelPositions imageWidth imageHeight
-   in runST $ do
-        gensRef <- newSTRef gens
-        mapM
-          (\rowPs ->
-             map albedoToColor <$>
-             parallelRenderRow
-               rowPs
-               staticEnv
-               gensRef)
-          pp
-
-parallelRenderRow ::
-     [(Int, Int)]
-  -> RenderStaticEnv
-  -> STRef s [RandGen]
-  -> ST s [Albedo]
-parallelRenderRow rowps staticEnv gsRef = do
-  gs <- readSTRef gsRef
-  let (sampleGroups, newGs) = unzip $ parMap
-        rpar
-        (\gen -> force $ runST $ do
-          genRef <- newSTRef gen
-          runReaderT
-            (do
-              row <- renderRow rowps
-              g   <- lift $ readSTRef genRef
-              return (row, g)
-            )
-            (mkRenderEnv staticEnv genRef)
+  let
+    imageWidth  = getStaticImageWidth staticEnv
+    imageHeight = getStaticImageHeight staticEnv
+    ns          = getNumSamples (mkRenderEnv staticEnv undefined)
+    pp          = pixelPositions imageWidth imageHeight
+  in
+    runST $ do
+      gensRef <- newSTRef gens
+      mapM
+        (\row -> do
+          gs <- readSTRef gensRef
+          let
+            (renderedRow, newGs) = unzip $ parMap
+              rpar
+              (\(g, pos) -> force $ runST $ do
+                gRef        <- newSTRef g
+                uvs <- uniformRandomUVs ns imageWidth imageHeight (gRef, pos)
+                renderedPos <- fmap albedoToColor (renderPos staticEnv gRef uvs)
+                ng          <- readSTRef gRef
+                return (renderedPos, ng)
+              )
+              (zip gs row)
+          writeSTRef gensRef newGs
+          return renderedRow
         )
-        gs
-  writeSTRef gsRef newGs
-  return $ foldl'
-    (zipWith (\(Albedo a1) (Albedo a2) -> Albedo $ vecAdd a1 a2))
-    (replicate (getStaticImageWidth staticEnv) (albedo (0.0, 0.0, 0.0)))
-    sampleGroups
-
+        pp
 
 -- Scenes
 
