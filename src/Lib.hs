@@ -31,6 +31,8 @@ import           Control.Monad.Reader
 import           Control.Monad.ST.Lazy       (ST, runST, strictToLazyST)
 import           Control.Parallel.Strategies (parMap, rpar)
 import           Data.Bits                   (xor)
+import           Data.Foldable               (toList)
+import qualified Data.Map.Strict             as M
 import           Data.Maybe                  (catMaybes)
 import           Data.Sequence               (Seq (..))
 import qualified Data.Sequence               as S
@@ -888,6 +890,11 @@ randomDoubleM = do
   lift $ writeSTRef gRef g2
   return x
 
+randomDoubleR :: (Double, Double) -> RandGen -> (Double, RandGen)
+randomDoubleR range (RandGen g) =
+  let (res, newGen) = Random.uniformR range g
+   in (res, RandGen newGen)
+
 randomDoubleRM :: Double -> Double -> RandomState s Double
 randomDoubleRM mn mx = do
   rd <- randomDoubleM
@@ -1062,7 +1069,7 @@ sampleColor (Albedo accCol) (u, v) = do
 
 renderPos :: RenderStaticEnv -> STRef s RandGen -> [(Double, Double)] -> ST s Albedo
 renderPos staticEnv genRef samples =
-  let ns = getNumSamples (mkRenderEnv staticEnv undefined)
+  let ns = Prelude.length samples
    in runReaderT
         (do (Albedo summedColor) <-
               foldM sampleColor (albedo (0.0, 0.0, 0.0)) samples
@@ -1089,6 +1096,121 @@ uniformRandomUVs nsPerThread imageWidth imageHeight (gRef, (x, y)) = do
         [1 .. nsPerThread]
   writeSTRef gRef gFin
   return res
+
+_testPoisson :: Int -> IO [(Double, Double)]
+_testPoisson ns = do
+  g <- newRandGen
+  return $ runST $ do
+    gRef        <- newSTRef g
+    _poissonRandomUVs ns 1 1 (gRef, (0,0))
+
+_poissonRandomUVs
+  :: Int
+  -> Int
+  -> Int
+  -> (STRef s RandGen, (Int, Int))
+  -> ST s [(Double, Double)]
+_poissonRandomUVs ns imageWidth imageHeight (gRef, (x, y)) = do
+  g <- readSTRef gRef
+  let (ru, g1) = randomDouble g
+  let (rv, g2) = randomDouble g1
+  let initialP = (xd + ru, yd + rv)
+  let (result, newG) =
+        go (M.singleton (getCoords initialP) 0, S.singleton initialP, [0], g2)
+  writeSTRef gRef newG
+  return $ map (\(sx, sy) -> (sx / imW, sy / imH)) result
+  where
+    k = 30 :: Int
+    (imW, imH) = (fromIntegral imageWidth, fromIntegral imageHeight)
+    (xd, yd) = (fromIntegral x, fromIntegral y)
+    ns' = fromIntegral ns :: Double
+    gridWidth = floor (sqrt ns') :: Int
+    a = 1.0 / sqrt ns' :: Double
+    r = sqrt 2 * a
+    r2 = r * r
+    go ::
+         (M.Map (Int, Int) Int, Seq (Double, Double), [Int], RandGen)
+      -> ([(Double, Double)], RandGen)
+    go (_, samples, [], g) = (toList samples, g)
+    go (cells, samples, active, g) =
+      go $ foldr stepActive (cells, samples, [], g) active
+    getCoords :: (Double, Double) -> (Int, Int)
+    getCoords (dx, dy) =
+      (floor ((dx - fromIntegral x) / a), floor ((dy - fromIntegral y) / a))
+    stepActive ::
+         Int
+      -> (M.Map (Int, Int) Int, Seq (Double, Double), [Int], RandGen)
+      -> (M.Map (Int, Int) Int, Seq (Double, Double), [Int], RandGen)
+    stepActive curActive (cs, ss, newActives, g) =
+      case nP of
+        Nothing -> (cs, ss, newActives, g)
+        Just p ->
+          ( M.insert (getCoords p) (S.length ss) cs
+          , ss S.|> p
+          , S.length ss : curActive : newActives
+          , newG)
+      where
+        (nP, newG) = getPoint (curX, curY) k g
+        (curX, curY) = force $ S.index ss curActive
+
+        getPoint ::
+             (Double, Double)
+          -> Int
+          -> RandGen
+          -> (Maybe (Double, Double), RandGen)
+        getPoint _ 0 g' = (Nothing, g')
+        getPoint curPos kRem g' =
+          let ((npx, npy), g1) = newRandomPoint curPos g'
+           in if and [npx > xd, npx < xd + 1, npy > yd, npy < yd + 1] &&
+                 pointValid (npx, npy)
+                then (Just (npx, npy), g1)
+                else getPoint curPos (kRem - 1) g1
+
+        newRandomPoint ::
+             (Double, Double) -> RandGen -> ((Double, Double), RandGen)
+        newRandomPoint (cpx, cpy) gen =
+          let (rho, g1) = randomDoubleR (r, 2 * r) gen
+              (theta, g2) = randomDoubleR (0, 2 * pi) g1
+           in ((cpx + rho * cos theta, cpy + rho * sin theta), g2)
+
+        pointValid :: (Double, Double) -> Bool
+        pointValid (npx, npy) =
+          all
+            (\(nbx, nby) -> (nbx - npx) ** 2 + (nby - npy) ** 2 >= r2)
+            (getNeighbors (getCoords (npx, npy)))
+
+        getNeighbors :: (Int, Int) -> [(Double, Double)]
+        getNeighbors (x', y') =
+          map (force $ S.index ss . (M.!) cs) $
+          filter
+            (\(nx, ny) ->
+               and [nx >= 0, nx < gridWidth, ny >= 0, ny < gridWidth] &&
+               M.member (nx, ny) cs)
+            (map (\(dx, dy) -> (x' + dx, y' + dy)) dxdy)
+          where
+            dxdy =
+              [ (-1, -2)
+              , (0, -2)
+              , (1, -2)
+              , (-2, -1)
+              , (-1, -1)
+              , (0, -1)
+              , (1, -1)
+              , (2, -1)
+              , (-2, 0)
+              , (-1, 0)
+              , (1, 0)
+              , (2, 0)
+              , (-2, 1)
+              , (-1, 1)
+              , (0, 1)
+              , (1, 1)
+              , (2, 1)
+              , (-1, 2)
+              , (0, 2)
+              , (1, 2)
+              , (0, 0)
+              ] :: [(Int, Int)]
 
 pixelPositions :: Int -> Int -> [[(Int, Int)]]
 pixelPositions nx ny = map (\y -> map (, y) [0 .. nx - 1]) [ny - 1,ny - 2 .. 0]
