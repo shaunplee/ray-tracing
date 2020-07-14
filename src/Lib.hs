@@ -1584,3 +1584,47 @@ makeNextWeekFinalScene earthtex t0 t1 gen =
         :<| sphere (point3 (220, 280, 300)) 80 (Lambertian pertext)
         :<| translate (point3 (-100, 270, 395)) (rotate YAxis 15 boxes2)
         :<| Empty)
+
+
+-- Monte Carlo experiments
+_runMonteCarloCircle :: IO ()
+_runMonteCarloCircle = do
+  (_, _) <- foldM (\acc _ -> mccircleLoop acc) (0, 0) ([0..] :: [Int])
+  return ()
+
+
+mccircleLoop :: (Int, Int) -> IO (Int, Int)
+mccircleLoop (inside, total) =
+  let n = 1000 :: Int
+   in do insideCircle <-
+           foldM
+             (\acc _ -> do
+                x <- Random.randomRIO (-1.0, 1.0) :: IO Double
+                y <- Random.randomRIO (-1.0, 1.0) :: IO Double
+                return $
+                  if x * x + y * y < 1
+                    then acc + 1
+                    else acc)
+             (0 :: Int)
+             [1 .. n]
+         let newInside = inside + insideCircle
+         let newTotal = total + n
+         putStrLn $
+           "Estimate of pi: " ++
+           show (4 * (fromIntegral newInside / fromIntegral newTotal) :: Double)
+         return (newInside, newTotal)
+
+-- Monte Carlo Integration
+mcIntegrate ::
+  (Double -> Double) -> (Double -> Double) -> (Double, Double) -> IO Double
+mcIntegrate f fpdf range = do
+  result <- foldM
+    (\acc _ -> do
+      x <- Random.randomRIO range
+      return $ acc + (f x / fpdf x)
+    )
+    0.0
+    [1 .. n]
+  putStrLn $ "I = " ++ show (result / fromIntegral n)
+  return result
+  where n = 1000000 :: Int
