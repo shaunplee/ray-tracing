@@ -29,7 +29,7 @@ import qualified Codec.Picture               as JP (Image (..), PixelRGB8 (..),
 import           Control.DeepSeq             (NFData, force, rnf)
 import           Control.Monad.Reader
 import           Control.Monad.ST.Lazy       (ST, runST, strictToLazyST)
-import           Control.Parallel.Strategies (parMap, rpar)
+import           Control.Parallel.Strategies (parList, rpar, using)
 import           Data.Bits                   (xor)
 import           Data.Foldable               (toList)
 import qualified Data.Map.Strict             as M
@@ -1217,32 +1217,37 @@ pixelPositions nx ny = map (\y -> map (, y) [0 .. nx - 1]) [ny - 1,ny - 2 .. 0]
 
 runRender :: RenderStaticEnv -> [RandGen] -> [[RGB]]
 runRender staticEnv gens =
-  let
-    imageWidth  = getStaticImageWidth staticEnv
-    imageHeight = getStaticImageHeight staticEnv
-    ns          = getNumSamples (mkRenderEnv staticEnv undefined)
-    pp          = pixelPositions imageWidth imageHeight
-  in
-    runST $ do
-      gensRef <- newSTRef gens
-      mapM
-        (\row -> do
-          gs <- readSTRef gensRef
-          let
-            (renderedRow, newGs) = unzip $ parMap
-              rpar
-              (\(g, pos) -> force $ runST $ do
-                gRef        <- newSTRef g
-                uvs <- uniformRandomUVs ns imageWidth imageHeight (gRef, pos)
-                renderedPos <- fmap albedoToColor (renderPos staticEnv gRef uvs)
-                ng          <- readSTRef gRef
-                return (renderedPos, ng)
-              )
-              (zip gs row)
-          writeSTRef gensRef newGs
-          return renderedRow
-        )
-        pp
+  let imageWidth = getStaticImageWidth staticEnv
+      imageHeight = getStaticImageHeight staticEnv
+      ns = getNumSamples (mkRenderEnv staticEnv undefined)
+      pp = pixelPositions imageWidth imageHeight
+   in runST $ do
+        gensRef <- newSTRef gens
+        mapM
+          (\row -> do
+             gs <- readSTRef gensRef
+             let (renderedRow, newGs) =
+                   unzip
+                     (map
+                        (\(g, pos) ->
+                           force $
+                           runST $ do
+                             gRef <- newSTRef g
+                             uvs <-
+                               uniformRandomUVs
+                                 ns
+                                 imageWidth
+                                 imageHeight
+                                 (gRef, pos)
+                             renderedPos <-
+                               fmap albedoToColor (renderPos staticEnv gRef uvs)
+                             ng <- readSTRef gRef
+                             return (renderedPos, ng))
+                        (zip gs row) `using`
+                      parList rpar)
+             writeSTRef gensRef newGs
+             return renderedRow)
+          pp
 
 -- Scenes
 
