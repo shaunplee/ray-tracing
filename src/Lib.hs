@@ -29,7 +29,7 @@ import qualified Codec.Picture               as JP (Image (..), PixelRGB8 (..),
 import           Control.DeepSeq             (NFData, force, rnf)
 import           Control.Monad.Reader
 import           Control.Monad.ST.Lazy       (ST, runST, strictToLazyST)
-import           Control.Parallel.Strategies (parList, rpar, using)
+import           Control.Parallel.Strategies (parListChunk, rpar, using)
 import           Data.Bits                   (xor)
 import           Data.Foldable               (toList)
 import qualified Data.Map.Strict             as M
@@ -1244,7 +1244,7 @@ runRender staticEnv gens =
                              ng <- readSTRef gRef
                              return (renderedPos, ng))
                         (zip gs row) `using`
-                      parList rpar)
+                      parListChunk 16 rpar)
              writeSTRef gensRef newGs
              return renderedRow)
           pp
@@ -1615,9 +1615,11 @@ mccircleLoop (inside, total) =
          return (newInside, newTotal)
 
 -- Monte Carlo Integration
-mcIntegrate ::
+-- >>> show 123
+--
+_mcIntegrate ::
   (Double -> Double) -> (Double -> Double) -> (Double, Double) -> IO Double
-mcIntegrate f fpdf range = do
+_mcIntegrate f fpdf range = do
   result <- foldM
     (\acc _ -> do
       x <- Random.randomRIO range
