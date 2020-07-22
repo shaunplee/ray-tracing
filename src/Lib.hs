@@ -30,7 +30,7 @@ import qualified Codec.Picture               as JP (Image (..), PixelRGB8 (..),
 import           Control.DeepSeq             (NFData, force, rnf)
 import           Control.Monad.Reader
 import           Control.Monad.ST.Lazy       (ST, runST, strictToLazyST)
-import           Control.Parallel.Strategies (parListChunk, rpar, using)
+import           Control.Parallel.Strategies (parTraversable, rpar, using)
 import           Data.Bits                   (xor)
 import           Data.Foldable               (toList)
 import qualified Data.Map.Strict             as M
@@ -38,7 +38,8 @@ import           Data.Maybe                  (catMaybes)
 import           Data.Sequence               (Seq (..))
 import qualified Data.Sequence               as S
 import           Data.STRef.Lazy
-import qualified Data.Vector                 as VV (Vector, fromList, (!))
+import qualified Data.Vector                 as VV (Vector, fromList, map,
+                                                    toList, unzip, zip, (!))
 import           Data.Vector.Unboxed         (Vector, enumFromN, freeze, thaw)
 import qualified Data.Vector.Unboxed         as V ((!))
 import qualified Data.Vector.Unboxed.Mutable as MV (swap)
@@ -256,10 +257,10 @@ colorToAlbedo (RGB (r, g, b)) =
   albedo
     (fromIntegral r / 255.0, fromIntegral g / 255.0, fromIntegral b / 255.0)
 
-printRow :: Handle -> Int -> (Int, [RGB]) -> IO ()
+printRow :: Handle -> Int -> (Int, VV.Vector RGB) -> IO ()
 printRow handle imageHeight (i, row) = do
   hPutStr stderr ("\rRendering row " ++ show i ++ " of " ++ show imageHeight)
-  hPutStrLn handle $ showRow row
+  hPutStrLn handle $ showRow (VV.toList row)
 
 showRow :: [RGB] -> String
 showRow row = unwords $ fmap show row
@@ -1213,23 +1214,23 @@ _poissonRandomUVs ns imageWidth imageHeight (gRef, (x, y)) = do
               , (0, 0)
               ] :: [(Int, Int)]
 
-pixelPositions :: Int -> Int -> [[(Int, Int)]]
-pixelPositions nx ny = map (\y -> map (, y) [0 .. nx - 1]) [ny - 1,ny - 2 .. 0]
+pixelPositions :: Int -> Int -> [VV.Vector (Int, Int)]
+pixelPositions nx ny = map (\y -> VV.fromList $ map (, y) [0 .. nx - 1]) [ny - 1,ny - 2 .. 0]
 
-runRender :: RenderStaticEnv -> [RandGen] -> [[RGB]]
+runRender :: RenderStaticEnv -> [RandGen] -> [VV.Vector RGB]
 runRender staticEnv gens =
   let imageWidth = getStaticImageWidth staticEnv
       imageHeight = getStaticImageHeight staticEnv
       ns = getNumSamples (mkRenderEnv staticEnv undefined)
       pp = pixelPositions imageWidth imageHeight
    in runST $ do
-        gensRef <- newSTRef gens
+        gensRef <- newSTRef (VV.fromList gens)
         mapM
           (\row -> do
              gs <- readSTRef gensRef
              let (renderedRow, newGs) =
-                   unzip
-                     (map
+                   VV.unzip
+                     (VV.map
                         (\(g, pos) ->
                            force $
                            runST $ do
@@ -1244,8 +1245,8 @@ runRender staticEnv gens =
                                fmap albedoToColor (renderPos staticEnv gRef uvs)
                              ng <- readSTRef gRef
                              return (renderedPos, ng))
-                        (zip gs row) `using`
-                      parListChunk 16 rpar)
+                        (VV.zip gs row) `using`
+                      parTraversable rpar)
              writeSTRef gensRef newGs
              return renderedRow)
           pp
