@@ -9,6 +9,7 @@ module Lib
     , makeEarthScene
     , makeNextWeekFinalScene
     , makeRandomScene
+    , makeRandomSceneBookOne
     , makeSimpleLightScene
     , makeTwoPerlinSpheresScene
     , makeTwoSpheresScene
@@ -1445,7 +1446,64 @@ randomSceneCamera (imageWidth, imageHeight) =
     0.0
     1.0
 
--- |Generate the image from the cover of the book with lots of spheres
+-- |Generate the image from the cover of the book one with lots of spheres
+makeRandomSceneBookOne :: RandGen -> (Scene, RandGen)
+makeRandomSceneBookOne gen = runST $ do
+  gRef  <- newSTRef gen
+  world <- runReaderT makeSceneM (dummyRenderEnv gRef)
+  g1    <- readSTRef gRef
+  return (world, g1)
+ where
+  makeSceneM :: RandomState s Scene
+  makeSceneM = do
+    let ns = [ (x, y) | x <- [-11 .. 10], y <- [-11 .. 10] ]
+    let ground = sphere (point3 (0.0, -1000.0, 0.0))
+                        1000
+                        (Lambertian (ConstantColor $ albedo (0.5, 0.5, 0.5))) --gray
+    let s1 =
+          sphere (point3 (0.0, 1.0, 0.0)) 1.0 (Dielectric (RefractiveIdx 1.5))
+    let s2 = sphere (point3 (-4.0, 1.0, 0.0))
+                    1.0
+                    (Lambertian (ConstantColor $ albedo (0.4, 0.2, 0.1)))
+    let s3 = sphere
+          (point3 (4.0, 1.0, 0.0))
+          1.0
+          (Metal (ConstantColor $ albedo (0.7, 0.6, 0.5)) (Fuzz 0.0))
+    nps   <- catMaybes <$> mapM makeRandomSphereM ns
+    world <-
+      makeBVH (Just (0.0, 1.0)) $ ground :<| s1 :<| s2 :<| s3 :<| S.fromList nps
+    return (world, albedo (0.7, 0.8, 0.9))
+  makeRandomSphereM :: (Int, Int) -> RandomState s (Maybe Hittable)
+  makeRandomSphereM (a, b) = do
+    mat <- randomDoubleM
+    px  <- randomDoubleM
+    py  <- randomDoubleM
+    let center =
+          point3 (fromIntegral a + 0.9 * px, 0.2, fromIntegral b + 0.9 * py)
+    if Lib.length (center `vecSub` point3 (4.0, 0.2, 0)) <= 0.9
+      then return Nothing
+      else if
+        | mat < 0.8 -- Diffuse
+                    -> do
+          a1 <- randomVec3DoubleM
+          a2 <- randomVec3DoubleM
+          let alb = Albedo $ a1 `vecMul` a2
+          return $ Just $ sphere center 0.2 (Lambertian (ConstantColor alb))
+        | mat < 0.95 -- Metal
+                     -> do
+          alb  <- Albedo <$> randomVec3DoubleRM 0.5 1.0
+          fuzz <- randomDoubleRM 0.0 0.5
+          return $ Just $ sphere center
+                                 0.2
+                                 (Metal (ConstantColor alb) (Fuzz fuzz))
+        | otherwise --Glass
+                    -> return $ Just $ sphere center
+                                              0.2
+                                              (Dielectric (RefractiveIdx 1.5))
+
+
+-- |Generate the image from the cover of the book with lots of
+-- spheres, but tweaked to demonstrate other features
 makeRandomScene :: Texture -> Time -> Time -> RandGen -> (Scene, RandGen)
 makeRandomScene earthtex _ _ gen =
   runST $ do
