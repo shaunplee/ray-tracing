@@ -446,8 +446,8 @@ data Hittable
   | Cuboid !Point3 -- | box min
            !Point3 -- | box max
            ![Rectangle] -- | Rects of the six sides of the box
-  | BVHNode !Hittable -- | bvh_left
-            !Hittable -- | bvh_right
+  | BVHNode Hittable -- | bvh_left
+            Hittable -- | bvh_right
             !Box -- | bvh_box
   | Translate !Point3 -- | translation offset
               !Hittable -- | the translated Hittable
