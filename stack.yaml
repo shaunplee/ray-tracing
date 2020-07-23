@@ -50,8 +50,8 @@ extra-deps:
 # extra-package-dbs: []
 
 ghc-options:
-  "$everything": -O2
   "$targets": -Wall -fexcess-precision -optc-ffast-math -threaded -pgmlo /usr/local/opt/llvm@7/bin/opt -pgmlc /usr/local/opt/llvm@7/bin/llc -fllvm -optlo-O3 -optl-ffast-math -funfolding-use-threshold1000
+  "$everything": -O2 -haddock
 
 # Control whether we use the GHC we find on the path
 # system-ghc: true

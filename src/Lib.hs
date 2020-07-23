@@ -265,25 +265,37 @@ printRow handle imageHeight (i, row) = do
 showRow :: [RGB] -> String
 showRow row = unwords $ fmap show row
 
-data Ray =
-  Ray !Point3 -- | ray_origin
-      !Point3 -- | ray_direction
-      !Double -- | ray_time
+data Ray
+  = Ray
+      !Point3
+      -- ^ ray_origin
+      !Point3
+      -- ^ ray_direction
+      !Double
+      -- ^ ray_time
   deriving (Show)
 
 at :: Ray -> Double -> Point3
 at (Ray orn dr _) t = orn `vecAdd` scale t dr
 
-data Hit =
-  Hit !Double -- | hit_t
-      !Point3 -- | hit_p
-      !Point3 -- | hit_normal - vector normal to the surface of the object
-                 -- at the point of the hit
-      !Double -- | hit_u
-      !Double -- | hit_v
-      !Bool -- | hit_frontFace --  did the ray hit the outer face of the
-                 -- object?                   -
-      !Material -- | hit_material}
+data Hit
+  = Hit
+      !Double
+      -- ^ hit_t
+      !Point3
+      -- ^ hit_p
+      !Point3
+      -- ^ hit_normal - vector normal to the surface of the object
+      -- at the point of the hit
+      !Double
+      -- ^ hit_u
+      !Double
+      -- ^ hit_v
+      !Bool
+      -- ^ hit_frontFace --  did the ray hit the outer face of the
+      -- object?                   -
+      !Material
+      -- ^ hit_material}
 
 data Material
   = Lambertian Texture
@@ -320,16 +332,29 @@ instance Show Image where
 
 data Texture
   = ConstantColor Albedo
-  | CheckerTexture Texture -- | checkerTextureOdd
-                   Texture -- | checkerTextureEven
-  | Perlin (VV.Vector Vec3) -- | perlinRanFloat
-           (Vector Int) -- | perlinPermX
-           (Vector Int) -- | perlinPermY
-           (Vector Int) -- | perlinPermZ
-           Double -- | perlinScale
-  | ImageTexture (Maybe Image) -- | imageTexture_image
-                 Int -- | imageTexture_width
-                 Int -- | imageTexture_height
+  | CheckerTexture
+      Texture
+      -- ^ checkerTextureOdd
+      Texture
+      -- ^ checkerTextureEven
+  | Perlin
+      (VV.Vector Vec3)
+      -- ^ perlinRanFloat
+      (Vector Int)
+      -- ^ perlinPermX
+      (Vector Int)
+      -- ^ perlinPermY
+      (Vector Int)
+      -- ^ perlinPermZ
+      Double
+      -- ^ perlinScale
+  | ImageTexture
+      (Maybe Image)
+      -- ^ imageTexture_image
+      Int
+      -- ^ imageTexture_width
+      Int
+      -- ^ imageTexture_height
   deriving (Show)
 
 pointCount :: Int
@@ -433,33 +458,66 @@ data Plane = XYPlane | XZPlane | YZPlane
   deriving Show
 
 data Hittable
-  = Sphere !Point3 -- | sphere_center
-           !Double -- | sphere_radius
-           !Material -- | sphere_material
-  | MovingSphere !Point3 -- | msphere_center0
-                 !Point3 -- | msphere_center1
-                 !Time -- | msphere_time0
-                 !Time -- | msphere_time1
-                 !Time -- | duration
-                 !Double -- | msphere_radius
-                 !Material -- | msphere_material
+  = Sphere
+      !Point3
+      -- ^ sphere_center
+      !Double
+      -- ^ sphere_radius
+      !Material
+      -- ^ sphere_material
+  | MovingSphere
+      !Point3
+      -- ^ msphere_center0
+      !Point3
+      -- ^ msphere_center1
+      !Time
+      -- ^ msphere_time0
+      !Time
+      -- ^ msphere_time1
+      !Time
+      -- ^ duration
+      !Double
+      -- ^ msphere_radius
+      !Material
+      -- ^ msphere_material
   | Rect !Rectangle
-  | Cuboid !Point3 -- | box min
-           !Point3 -- | box max
-           ![Rectangle] -- | Rects of the six sides of the box
-  | BVHNode Hittable -- | bvh_left
-            Hittable -- | bvh_right
-            !Box -- | bvh_box
-  | Translate !Point3 -- | translation offset
-              !Hittable -- | the translated Hittable
-  | Rotate !Axis -- | the axis of rotation
-           !Double -- | sin theta
-           !Double -- | cos theta
-           !Box -- | the BoundingBox
-           !Hittable -- | the rotated Hittable
-  | ConstantMedium !Double -- | negative inverse density of the constant medium
-                   !Material -- | material of the constant medium
-                   !Hittable -- | the shape of the constant medium
+  | Cuboid
+      !Point3
+      -- ^ box min
+      !Point3
+      -- ^ box max
+      ![Rectangle]
+      -- ^ Rects of the six sides of the box
+  | BVHNode
+      Hittable
+      -- ^ bvh_left
+      Hittable
+      -- ^ bvh_right
+      !Box
+      -- ^ bvh_box
+  | Translate
+      !Point3
+      -- ^ translation offset
+      !Hittable
+      -- ^ the translated Hittable
+  | Rotate
+      !Axis
+      -- ^ the axis of rotation
+      !Double
+      -- ^ sin theta
+      !Double
+      -- ^ cos theta
+      !Box
+      -- ^ the BoundingBox
+      !Hittable
+      -- ^ the rotated Hittable
+  | ConstantMedium
+      !Double
+      -- ^ negative inverse density of the constant medium
+      !Material
+      -- ^ material of the constant medium
+      !Hittable
+      -- ^ the shape of the constant medium
   deriving (Show)
 
 sphere :: Point3 -> Double -> Material -> Hittable
@@ -483,25 +541,46 @@ cuboid bmin@(Vec3 x0 y0 z0) bmax@(Vec3 x1 y1 z1) mat =
     ]
 
 data Rectangle
-  = XYRect !Double   -- | xyrect_x0
-           !Double   -- | xyrect_x1
-           !Double   -- | xyrect_y0
-           !Double   -- | xyrect_y1
-           !Double   -- | xyrect_k
-           !Material -- | xyrect_material
-  | XZRect !Double   -- | _xzrect_x0
-           !Double   -- | _xzrect_x1
-           !Double   -- | _xzrect_z0
-           !Double   -- | _xzrect_z1
-           !Double   -- | _xzrect_k
-           !Material -- | _xzrect_material
-  | YZRect !Double   -- | _yzrect_y0
-           !Double   -- | _yzrect_y1
-           !Double   -- | _yzrect_z0
-           !Double   -- | _yzrect_z1
-           !Double   -- | _yzrect_k
-           !Material -- | _yzrect_material
-    deriving Show
+  = XYRect
+      !Double
+      -- ^ xyrect_x0
+      !Double
+      -- ^ xyrect_x1
+      !Double
+      -- ^ xyrect_y0
+      !Double
+      -- ^ xyrect_y1
+      !Double
+      -- ^ xyrect_k
+      !Material
+      -- ^ xyrect_material
+  | XZRect
+      !Double
+      -- ^ _xzrect_x0
+      !Double
+      -- ^ _xzrect_x1
+      !Double
+      -- ^ _xzrect_z0
+      !Double
+      -- ^ _xzrect_z1
+      !Double
+      -- ^ _xzrect_k
+      !Material
+      -- ^ _xzrect_material
+  | YZRect
+      !Double
+      -- ^ _yzrect_y0
+      !Double
+      -- ^ _yzrect_y1
+      !Double
+      -- ^ _yzrect_z0
+      !Double
+      -- ^ _yzrect_z1
+      !Double
+      -- ^ _yzrect_k
+      !Material
+      -- ^ _yzrect_material
+  deriving (Show)
 
 rect ::
      Plane
@@ -976,17 +1055,28 @@ _randomInHemisphereM n = do
     then return inUnitSphere
     else return (vecNegate inUnitSphere)
 
-data Camera = Camera
-  !Point3    -- |  camera_origin
-  !Point3    -- |  camera_llc
-  !Point3    -- |  camera_horiz
-  !Point3    -- |  camera_vert
-  !Point3    -- |  camera_u
-  !Point3    -- |  camera_v
-  !Point3    -- |  _camera_w
-  !Double -- |  camera_lensRadius
-  !Double -- |  camera_t0
-  !Double -- |  camera_t1
+data Camera
+  = Camera
+      !Point3
+      -- ^  camera_origin
+      !Point3
+      -- ^  camera_llc
+      !Point3
+      -- ^  camera_horiz
+      !Point3
+      -- ^  camera_vert
+      !Point3
+      -- ^  camera_u
+      !Point3
+      -- ^  camera_v
+      !Point3
+      -- ^  _camera_w
+      !Double
+      -- ^  camera_lensRadius
+      !Double
+      -- ^  camera_t0
+      !Double
+      -- ^  camera_t1
 
 getRay :: Camera -> Double -> Double -> RandomState s Ray
 getRay (Camera c_or c_llc c_horiz c_vert c_u c_v _ c_lr c_time0 c_time1) s t =
@@ -1674,7 +1764,7 @@ mccircleLoop (inside, total) =
          return (newInside, newTotal)
 
 -- Monte Carlo Integration
--- >>> show 123
+-- >>> 3 + 4
 --
 _mcIntegrate ::
   (Double -> Double) -> (Double -> Double) -> (Double, Double) -> IO Double
