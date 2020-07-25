@@ -27,6 +27,7 @@ module Lib
     , sphere
     , surroundingBox
     , translate
+    , vecAdd
     , vecMul
     , vecSub
     , vecX
@@ -68,9 +69,9 @@ import           Data.Vector.Unboxed         (Vector, enumFromN, freeze, thaw)
 import qualified Data.Vector.Unboxed         as V ((!))
 import qualified Data.Vector.Unboxed.Mutable as MV (swap)
 import           Data.Word                   (Word8)
+import           Random
 import           System.IO                   (Handle, hPutStr, hPutStrLn,
                                               stderr)
-import qualified System.Random               as Random
 
 -- Epsilon (some smallish number)
 epsilon :: Double
@@ -111,15 +112,6 @@ getStaticImageWidth (RenderStaticEnv (_, _, (width, _), _, _, _, _)) = width
 
 getStaticImageHeight :: RenderStaticEnv -> Int
 getStaticImageHeight (RenderStaticEnv (_, _, (_, height), _, _, _, _)) = height
-
-newtype RandGen = RandGen Random.StdGen
-  deriving Show
-
-newRandGen :: IO RandGen
-newRandGen = RandGen <$> Random.newStdGen
-
-randGen :: Int -> RandGen
-randGen s = RandGen (Random.mkStdGen s)
 
 newtype RenderEnv s =
   RenderEnv ( RenderStaticEnv
@@ -188,9 +180,6 @@ _getNsPerThread (RenderEnv (RenderStaticEnv (_, _, _, _, _, _, nsPerThread), _))
 
 getGenRef :: RenderEnv s -> STRef s RandGen
 getGenRef (RenderEnv (_, genRef)) = genRef
-
-instance NFData RandGen where
-  rnf (RandGen pmt) = seq pmt ()
 
 type RayTracingM s = RandomState s
 
@@ -982,11 +971,6 @@ faceNormal (Ray _ rdr _) outwardNormal =
           then outwardNormal
           else vecNegate outwardNormal)
 
-randomDouble :: RandGen -> (Double, RandGen)
-randomDouble (RandGen g) =
-  let (x, g1) = Random.random g
-   in (x, RandGen g1)
-
 randomDoubleM :: RandomState s Double
 randomDoubleM = do
   gRef <- asks getGenRef
@@ -994,11 +978,6 @@ randomDoubleM = do
   let (x, g2) = randomDouble g1
   lift $ writeSTRef gRef g2
   return x
-
-randomDoubleR :: (Double, Double) -> RandGen -> (Double, RandGen)
-randomDoubleR range (RandGen g) =
-  let (res, newGen) = Random.uniformR range g
-   in (res, RandGen newGen)
 
 randomDoubleRM :: Double -> Double -> RandomState s Double
 randomDoubleRM mn mx = do
@@ -1364,48 +1343,3 @@ runRender staticEnv gens =
              writeSTRef gensRef newGs
              return renderedRow)
           pp
-
--- Monte Carlo experiments
-_runMonteCarloCircle :: IO ()
-_runMonteCarloCircle = do
-  (_, _) <- foldM (\acc _ -> mccircleLoop acc) (0, 0) ([0..] :: [Int])
-  return ()
-
-
-mccircleLoop :: (Int, Int) -> IO (Int, Int)
-mccircleLoop (inside, total) =
-  let n = 1000 :: Int
-   in do insideCircle <-
-           foldM
-             (\acc _ -> do
-                x <- Random.randomRIO (-1.0, 1.0) :: IO Double
-                y <- Random.randomRIO (-1.0, 1.0) :: IO Double
-                return $
-                  if x * x + y * y < 1
-                    then acc + 1
-                    else acc)
-             (0 :: Int)
-             [1 .. n]
-         let newInside = inside + insideCircle
-         let newTotal = total + n
-         putStrLn $
-           "Estimate of pi: " ++
-           show (4 * (fromIntegral newInside / fromIntegral newTotal) :: Double)
-         return (newInside, newTotal)
-
--- Monte Carlo Integration
--- >>> 3 + 4
---
-_mcIntegrate ::
-  (Double -> Double) -> (Double -> Double) -> (Double, Double) -> IO Double
-_mcIntegrate f fpdf range = do
-  result <- foldM
-    (\acc _ -> do
-      x <- Random.randomRIO range
-      return $ acc + (f x / fpdf x)
-    )
-    0.0
-    [1 .. n]
-  putStrLn $ "I = " ++ show (result / fromIntegral n)
-  return result
-  where n = 1000000 :: Int

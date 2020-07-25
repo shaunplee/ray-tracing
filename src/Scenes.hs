@@ -328,14 +328,13 @@ makeRandomScene earthtex _ _ gen =
               (point3 (0.0, -1000.0, 0.0))
               1000
               -- (Lambertian (ConstantColor $ albedo (0.5, 0.5, 0.5))) --gray
-              ( Lambertian
-                  ( CheckerTexture
-                      (ConstantColor $ albedo (0.2, 0.3, 0.1))
-                      (ConstantColor $ albedo (0.9, 0.9, 0.9))
-                  )
-              )
-      let s1 =
+              (Lambertian
+                 (CheckerTexture
+                    (ConstantColor $ albedo (0.2, 0.3, 0.1))
+                    (ConstantColor $ albedo (0.9, 0.9, 0.9))))
+      let s1
             -- Sphere (Vec3 (0.0, 1.0, 0.0)) 1.0 (Dielectric (RefractiveIdx 1.5))
+           =
             cuboid
               (point3 (-0.75, 0.0, -0.75))
               (point3 (0.75, 1.5, 0.75))
@@ -354,7 +353,7 @@ makeRandomScene earthtex _ _ gen =
       nps <- catMaybes <$> mapM makeRandomSphereM ns
       world <-
         makeBVH (Just (0.0, 1.0)) $
-          ground :<| s1 :<| s2 :<| s3 :<| S.fromList nps
+        ground :<| s1 :<| s2 :<| s3 :<| S.fromList nps
       return (world, albedo (0.7, 0.8, 0.9))
     makeRandomSphereM :: (Int, Int) -> RandomState s (Maybe Hittable)
     makeRandomSphereM (a, b) = do
@@ -365,16 +364,33 @@ makeRandomScene earthtex _ _ gen =
             point3 (fromIntegral a + 0.9 * px, 0.2, fromIntegral b + 0.9 * py)
       if Lib.length (center `vecSub` point3 (4.0, 0.2, 0)) <= 0.9
         then return Nothing
-        else
-          if
-              | mat < 0.8 -> -- Diffuse
-                do
-                  a1 <- randomVec3DoubleM
-                  a2 <- randomVec3DoubleM
-                  sph_move_x <- randomDoubleRM (-0.25) 0.25
-                  sph_move_z <- randomDoubleRM (-0.25) 0.25
-                  let alb = Albedo $ a1 `vecMul` a2
-                  return $ Just $ sphere center 0.2 (Dielectric (RefractiveIdx 1.5))
+        else if | mat < 0.8 -- Diffuse
+                 ->
+                  do a1 <- randomVec3DoubleM
+                     a2 <- randomVec3DoubleM
+                     sph_move_x <- randomDoubleRM (-0.25) 0.25
+                     sph_move_z <- randomDoubleRM (-0.25) 0.25
+                     let alb = Albedo $ a1 `vecMul` a2
+                     return $
+                       Just $
+                       movingSphere
+                         center
+                         (center `vecAdd` point3 (sph_move_x, 0, sph_move_z))
+                         0.0
+                         1.0
+                         0.2
+                         (Lambertian (ConstantColor alb))
+                | mat < 0.95 -- Metal
+                 ->
+                  do alb <- Albedo <$> randomVec3DoubleRM 0.5 1.0
+                     fuzz <- randomDoubleRM 0.0 0.5
+                     return $
+                       Just $
+                       sphere center 0.2 (Metal (ConstantColor alb) (Fuzz fuzz))
+                | otherwise --Glass
+                 ->
+                  return $
+                  Just $ sphere center 0.2 (Dielectric (RefractiveIdx 1.5))
 
 nextWeekFinalSceneCamera :: (Int, Int) -> Camera
 nextWeekFinalSceneCamera (imageWidth, imageHeight) =
