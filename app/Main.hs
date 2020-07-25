@@ -2,6 +2,7 @@ module Main where
 
 import           Control.Monad (replicateM)
 import           Lib
+import           Scenes
 import           System.IO     (hPutStr, stderr, stdout)
 
 -- X and Y dimensions of output image
