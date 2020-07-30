@@ -1,7 +1,12 @@
-module Random (newRandGen, randomDouble, randomDoubleR, randGen, RandGen(..)) where
+module Random
+    ( newRandGen
+    , randomDouble
+    , randomDoubleR
+    , randGen
+    , RandGen(..)) where
 
 import           Control.DeepSeq (NFData, rnf)
-import qualified System.Random as Random
+import qualified System.Random   as Random
 
 newtype RandGen = RandGen Random.StdGen
   deriving (Show)
