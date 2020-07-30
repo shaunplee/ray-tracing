@@ -57,10 +57,7 @@ makeCornellBoxScene t0 t1 gen = runST $ do
                 :<| translate
                   (point3 (130, 0, 65))
                   ( rotate YAxis (-18) $
-                      rotate
-                        ZAxis
-                        30
-                        (cuboid (point3 (0, 0, 0)) (point3 (165, 165, 165)) white)
+                        cuboid (point3 (0, 0, 0)) (point3 (165, 165, 165)) white
                   )
                 :<| Empty
             )
@@ -121,7 +118,7 @@ cornellCamera (imageWidth, imageHeight) =
     (point3 (0.0, 1.0, 0.0))
     40.0
     (fromIntegral imageWidth / fromIntegral imageHeight)
-    0.1
+    0.0
     10.0
     0.0
     1.0
