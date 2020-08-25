@@ -254,6 +254,24 @@ cross :: Vec3 -> Vec3 -> Vec3
 cross (Vec3 x1 y1 z1) (Vec3 x2 y2 z2) =
   point3 (y1 * z2 - z1 * y2, z1 * x2 - x1 * z2, x1 * y2 - y1 * x2)
 
+data ONB = ONB { onbU :: !Vec3, onbV :: !Vec3, onbW :: !Vec3 }
+  deriving Show
+
+onbLocal :: ONB -> Double -> Double -> Double -> Vec3
+onbLocal (ONB u v w) a b c = scale a u |+| scale b v |+| scale c w
+
+onbLocalV :: ONB -> Vec3  -> Vec3
+onbLocalV (ONB u v w) (Vec3 a b c) = scale a u |+| scale b v |+| scale c w
+
+onbFromW :: Vec3 -> ONB
+onbFromW n = let w = makeUnitVector n
+                 a = if abs (vecX w) > 0.9
+                     then Vec3 0.0 1.0 0.0
+                     else Vec3 1.0 0.0 0.0
+                 v = makeUnitVector (cross w a)
+                 u = cross w v
+             in ONB u v w
+
 clamp :: (Double, Double) -> Double -> Double
 clamp (mn, mx) x =
   if | x < mn -> mn
@@ -334,6 +352,9 @@ albedo (r, g, b) = Albedo $ Vec3 r g b
 
 instance NFData Albedo where
   rnf (Albedo v) = rnf v `seq` ()
+
+newtype Pdf = Pdf Double
+  deriving Show
 
 newtype Image = Image (JP.Image JP.PixelRGB8)
 
@@ -702,20 +723,25 @@ boxRayIntersect (Box (Vec3 minX minY minZ) (Vec3 maxX maxY maxZ)) (Ray (Vec3 orX
 
 type Time = Double
 
-scatter :: Material -> Ray -> Hit -> RandomState s (Maybe (Ray, Albedo))
+scatter :: Material -> Ray -> Hit -> RandomState s (Maybe (Ray, Albedo, Pdf))
 scatter (Lambertian tex) (Ray _ _ rtime) (Hit _ hp hn hu hv _ _) = do
-  rUnit <- randomUnitVectorM
-  let scatterDirection = hn `vecAdd` rUnit
+  -- rUnit <- randomUnitVectorM
+  rCosDir <- randomCosineDirection
+  let uvw = onbFromW hn
+  let direction = onbLocalV uvw rCosDir
+  let scatterDirection = makeUnitVector direction
   let scattered = Ray hp scatterDirection rtime
-  return $ Just (scattered, textureValue tex hu hv hp)
+  let pdf = Pdf $ (dot (onbW uvw) scatterDirection) / pi
+  -- let pdf = Pdf $ 0.5 / pi
+  return $ Just (scattered, textureValue tex hu hv hp, pdf)
 scatter (Metal tex (Fuzz fuzz)) (Ray _ rdr rtime) (Hit _ hp hn hu hv _ _) = do
   rUnit <- randomUnitVectorM
   let reflected = reflect (makeUnitVector rdr) hn
   let scattered@(Ray _ scat_dir _) =
-        Ray hp (reflected `vecAdd` scale fuzz rUnit) rtime
+        Ray hp (reflected |+| scale fuzz rUnit) rtime
   return $
     if dot scat_dir hn > 0.0
-      then Just (scattered, textureValue tex hu hv hp)
+      then Just (scattered, textureValue tex hu hv hp, Pdf 1)
       else Nothing
 scatter (Dielectric (RefractiveIdx ref_idx)) (Ray _ rdr rtime) (Hit _ hp hn _ _ hff _) = do
   let alb = albedo (1.0, 1.0, 1.0)
@@ -730,15 +756,34 @@ scatter (Dielectric (RefractiveIdx ref_idx)) (Ray _ rdr rtime) (Hit _ hp hn _ _ 
   return $
     if (etaiOverEtat * sinTheta > 1.0) || rd < schlick cosTheta etaiOverEtat
       then let reflected = reflect unitDirection hn
-            in Just (Ray hp reflected rtime, alb)
+            in Just (Ray hp reflected rtime, alb, Pdf 1)
       else let refracted = refract unitDirection hn etaiOverEtat
-            in Just (Ray hp refracted rtime, alb)
+            in Just (Ray hp refracted rtime, alb, Pdf 1)
 scatter DiffuseLight {} _ _  = return Nothing
 scatter (Isotropic tex) (Ray _ _ rtime) (Hit _ hp _ hu hv _ _) = do
   randDr <- randomInUnitSphereM
   let scattered = Ray hp randDr rtime
   let attenuation = textureValue tex hu hv hp
-  return $ Just (scattered, attenuation)
+  return $ Just (scattered, attenuation, Pdf 1)
+
+scatteringPdf :: Material -> Ray -> Hit -> Ray -> Double
+scatteringPdf
+  (Lambertian _)
+  _
+  (Hit _ _ recNormal _ _ _ _)
+  (Ray _ scatteredDirection _) =
+  let cosine = dot recNormal scatteredDirection
+  in if cosine < 0
+     then 0
+     else cosine / pi
+scatteringPdf (Metal _ _) _ _ _ =
+  error "Metal does not support scatteringPdf"
+scatteringPdf (Dielectric _) _ _ _ =
+  error "Dielectric does not support scatteringPdf"
+scatteringPdf (DiffuseLight _) _ _ _ =
+  error "DiffuseLight does not support scatteringPdf"
+scatteringPdf (Isotropic _) _ _ _ =
+  error "Isotropic does not support scatteringPdf"
 
 emitted :: Material -> Double -> Double -> Point3 -> Albedo
 emitted (DiffuseLight tex) u v p = textureValue tex u v p
@@ -1054,12 +1099,25 @@ randomUnitVectorM = do
   lift $ writeSTRef gRef g2
   return $ point3 (r * cos a, r * sin a, z)
 
-_randomInHemisphereM :: Point3 -> RandomState s Vec3
-_randomInHemisphereM n = do
+randomInHemisphereM :: Point3 -> RandomState s Vec3
+randomInHemisphereM n = do
   inUnitSphere <- randomInUnitSphereM
   if (inUnitSphere `dot` n) > 0.0
     then return inUnitSphere
     else return (vecNegate inUnitSphere)
+
+randomCosineDirection :: RandomState s Vec3
+randomCosineDirection = do
+  gRef <- asks getGenRef
+  g0 <- lift $ readSTRef gRef
+  let (r1, g1) = randomDouble g0
+  let (r2, g2) = randomDouble g1
+  lift $ writeSTRef gRef g2
+  let z = sqrt (1 - r2)
+  let phi = 2 * pi * r1
+  let x = cos phi * sqrt r2
+  let y = sin phi * sqrt r2
+  return $ point3 (x, y, z)
 
 data Camera
   = Camera
