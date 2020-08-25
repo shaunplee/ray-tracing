@@ -17,7 +17,7 @@
 #
 # resolver: ./custom-snapshot.yaml
 # resolver: https://example.com/snapshots/2018-01-01.yaml
-resolver: lts-16.6
+resolver: lts-16.9
 
 # User packages to be built.
 # Various formats can be used as shown in the example below.
@@ -50,8 +50,9 @@ extra-deps:
 # extra-package-dbs: []
 
 ghc-options:
-  "$targets": -Wall -fexcess-precision -optc-ffast-math -threaded -pgmlo /usr/local/opt/llvm@7/bin/opt -pgmlc /usr/local/opt/llvm@7/bin/llc -fllvm -optlo-O3 -optl-ffast-math -funfolding-use-threshold1000
   "$everything": -O2 -haddock
+  "$targets": -Wall -fexcess-precision -optc-ffast-math -threaded -funfolding-use-threshold1000 -fwrite-ide-info -hiedir=.hie
+#  "$targets": -Wall -fexcess-precision -optc-ffast-math -threaded -pgmlo /usr/local/opt/llvm@7/bin/opt -pgmlc /usr/local/opt/llvm@7/bin/llc -fllvm -optlo-O3 -optl-ffast-math -funfolding-use-threshold1000
 
 # Control whether we use the GHC we find on the path
 # system-ghc: true
