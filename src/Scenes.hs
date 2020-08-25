@@ -30,41 +30,37 @@ import           Data.STRef.Lazy
 import           Lib
 
 makeCornellBoxScene :: Time -> Time -> RandGen -> (Scene, RandGen)
-makeCornellBoxScene t0 t1 gen = runST $ do
-  gRef <- newSTRef gen
-  world <-
-    runReaderT
-      ( do
-          let red = Lambertian $ ConstantColor (albedo (0.65, 0.05, 0.05))
-          let white = Lambertian $ ConstantColor (albedo (0.73, 0.73, 0.73))
-          let green = Lambertian $ ConstantColor (albedo (0.12, 0.45, 0.15))
-          let light = DiffuseLight $ ConstantColor (albedo (15, 15, 15))
-          makeBVH
-            (Just (t0, t1))
-            ( rect YZPlane 0 555 0 555 555 green
-                :<| rect YZPlane 0 555 0 555 0 red
-                :<| rect XZPlane 213 343 227 332 554 light
-                :<| rect XZPlane 0 555 0 555 0 white
-                :<| rect XZPlane 0 555 0 555 555 white
-                :<| rect XYPlane 0 555 0 555 555 white
-                :<| translate
-                  (point3 (265, 0, 295))
-                  ( rotate
-                      YAxis
-                      15
-                      (cuboid (point3 (0, 0, 0)) (point3 (165, 330, 165)) white)
-                  )
-                :<| translate
-                  (point3 (130, 0, 65))
-                  ( rotate YAxis (-18) $
-                        cuboid (point3 (0, 0, 0)) (point3 (165, 165, 165)) white
-                  )
-                :<| Empty
-            )
-      )
+makeCornellBoxScene t0 t1 gen = runST
+  $ do
+    gRef <- newSTRef gen
+    world <- runReaderT
+      (do
+         let red = Lambertian $ ConstantColor (albedo (0.65, 0.05, 0.05))
+         let white = Lambertian $ ConstantColor (albedo (0.73, 0.73, 0.73))
+         let green = Lambertian $ ConstantColor (albedo (0.12, 0.45, 0.15))
+         let light = DiffuseLight $ ConstantColor (albedo (15, 15, 15))
+         makeBVH
+           (Just (t0, t1))
+           (rect YZPlane 0 555 0 555 555 green
+            :<| rect YZPlane 0 555 0 555 0 red
+            :<| rect XZPlane 213 343 227 332 554 light
+            :<| rect XZPlane 0 555 0 555 0 white
+            :<| rect XZPlane 0 555 0 555 555 white
+            :<| rect XYPlane 0 555 0 555 555 white
+            :<| translate
+              (point3 (265, 0, 295))
+              (rotate
+                 YAxis
+                 15
+                 (cuboid (point3 (0, 0, 0)) (point3 (165, 330, 165)) white))
+            :<| translate
+              (point3 (130, 0, 65))
+              (rotate YAxis (-18)
+               $ cuboid (point3 (0, 0, 0)) (point3 (165, 165, 165)) white)
+            :<| Empty))
       (dummyRenderEnv gRef)
-  g1 <- readSTRef gRef
-  return ((world, albedo (0.0, 0.0, 0.0)), g1)
+    g1 <- readSTRef gRef
+    return ((world, albedo (0.0, 0.0, 0.0)), g1)
 
 makeCornellSmokeBoxScene :: Time -> Time -> RandGen -> (Scene, RandGen)
 makeCornellSmokeBoxScene t0 t1 gen = runST $ do
