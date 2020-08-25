@@ -785,9 +785,12 @@ scatteringPdf (DiffuseLight _) _ _ _ =
 scatteringPdf (Isotropic _) _ _ _ =
   error "Isotropic does not support scatteringPdf"
 
-emitted :: Material -> Double -> Double -> Point3 -> Albedo
-emitted (DiffuseLight tex) u v p = textureValue tex u v p
-emitted _ _ _ _                  = albedo (0, 0, 0)
+emitted :: Material -> Ray -> Hit -> Double -> Double -> Point3 -> Albedo
+emitted (DiffuseLight tex) _ (Hit _ _ _ _ _ ff _) u v p =
+  if not ff
+  then textureValue tex u v p
+  else albedo (0, 0, 0)
+emitted _ _ _ _ _ _                  = albedo (0, 0, 0)
 
 reflect :: Point3 -> Point3 -> Point3
 reflect v n = v |-| scale (2.0 * dot v n) n
@@ -1203,9 +1206,9 @@ rayColor ray depth = rayColorHelp ray depth id
             bgd <- asks getBackground
             lift $ writeSTRef gRef g1
             return $ alb_acc bgd
-          (Just h@(Hit _ hp _ hu hv _ hm), g1) -> do
+          (Just h@(Hit _ hp hn hu hv _ hm), g1) -> do
             lift $ writeSTRef gRef g1
-            let em@(Albedo emv) = emitted hm hu hv hp
+            let em@(Albedo emv) = emitted hm r h hu hv hp
             mscatter <- scatter hm r h
             case mscatter of
               Nothing -> return $ alb_acc em
