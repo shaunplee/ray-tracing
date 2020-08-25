@@ -313,11 +313,11 @@ data Hit
       -- ^ hit_material}
 
 data Material
-  = Lambertian Texture
-  | Metal Texture Fuzz
-  | Dielectric RefractiveIdx
-  | DiffuseLight Texture
-  | Isotropic Texture
+  = Lambertian !Texture
+  | Metal !Texture !Fuzz
+  | Dielectric !RefractiveIdx
+  | DiffuseLight !Texture
+  | Isotropic !Texture
   deriving Show
 
 newtype Fuzz = Fuzz Double
@@ -413,9 +413,9 @@ noise (Perlin ranvec permX permY permZ sc) p =
              ((fromIntegral di, fromIntegral dj, fromIntegral dk), rf d))
           ds
   in perlinInterp c u v w
-noise (ConstantColor _) _ = undefined
-noise (CheckerTexture _ _) _ = undefined
-noise ImageTexture {} _ = undefined
+noise (ConstantColor _) _ = error "ConstantColor does not support noise"
+noise (CheckerTexture _ _) _ = error "CheckerTexture does not support noise"
+noise ImageTexture {} _ = error "ImageTexture does not support noise"
 
 perlinInterp ::
      [((Double, Double, Double), Vec3)]
@@ -808,8 +808,8 @@ makeBVH mtime htbls = do
       h1 :<| h2 :<| Empty ->
         case comparator h1 h2 of
           LT -> return (h1, h2)
-          _  -> return (h2, h1)
-      _ -> do
+          _else -> return (h2, h1)
+      _moreThanTwoHtbls -> do
         let (lt_htbls, rt_htbls) =
               S.splitAt (objectSpan `div` 2) (S.sortBy comparator htbls)
         lt <- makeBVH mtime lt_htbls
