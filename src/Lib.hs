@@ -33,23 +33,22 @@ module Lib
     , vecX
     , vecY
     , vecZ
-    , Albedo (..)
-    , Axis (..)
-    , Box (..)
+    , Albedo(..)
+    , Axis(..)
+    , Box(..)
     , Camera
-    , Fuzz (..)
-    , Hittable (..)
-    , Image (..)
-    , Material (..)
-    , Plane (..)
+    , Fuzz(..)
+    , Hittable(..)
+    , Image(..)
+    , Material(..)
+    , Plane(..)
     , RandGen
     , RandomState
-    , RefractiveIdx (..)
+    , RefractiveIdx(..)
     , Scene
-    , Texture (..)
+    , Texture(..)
     , Time
-    , Vec3
-    ) where
+    , Vec3) where
 
 import qualified Codec.Picture               as JP (Image (..), PixelRGB8 (..),
                                                     pixelAt)
@@ -80,7 +79,7 @@ epsilon = 0.0001
 infinity :: Double
 infinity = read "Infinity" :: Double
 
--- A scene should be a BVHNode, which is a Hittable, and backrgound color
+-- A scene should be a BVHNode, which is a Hittable, and background color
 type Scene = (Hittable, Albedo)
 
 -- Use the ST monad to thread the random number generator
@@ -150,8 +149,8 @@ dummyRenderEnv :: STRef s RandGen -> RenderEnv s
 dummyRenderEnv = mkRenderEnv dummyRenderStaticEnv
 
 getSceneHittables :: RenderEnv s -> Hittable
-getSceneHittables (RenderEnv (RenderStaticEnv ((scn, _), _, _, _, _, _, _), _)) =
-  scn
+getSceneHittables
+  (RenderEnv (RenderStaticEnv ((scn, _), _, _, _, _, _, _), _)) = scn
 
 getBackground :: RenderEnv s -> Albedo
 getBackground (RenderEnv (RenderStaticEnv ((_, bkgd), _, _, _, _, _, _), _)) =
@@ -846,21 +845,22 @@ hit (BVHNode bvh_l bvh_r box) r t_min t_max gen =
                 -- yes, take hit from right branch
                (Just hitRight, g2) -> (Just hitRight, g2)
     else (Nothing, gen)
-hit (Cuboid _ _ rl) r t_min t_max gen =
-  foldr
-    (\h acc@(_, g) -> closerHit (hit (Rect h) r t_min t_max g) acc)
-    (Nothing, gen)
-    rl
+hit (Cuboid _ _ rl) r t_min t_max gen = foldr
+  (\h acc@(_, g) -> closerHit (hit (Rect h) r t_min t_max g) acc)
+  (Nothing, gen)
+  rl
   where
-    closerHit ::
-         (Maybe Hit, RandGen) -> (Maybe Hit, RandGen) -> (Maybe Hit, RandGen)
+    closerHit
+      :: (Maybe Hit, RandGen) -> (Maybe Hit, RandGen) -> (Maybe Hit, RandGen)
     closerHit (Nothing, rg) (Nothing, _) = (Nothing, rg)
     closerHit (Just h1, rg) (Nothing, _) = (Just h1, rg)
     closerHit (Nothing, rg) (Just h2, _) = (Just h2, rg)
-    closerHit (h1@(Just (Hit t1 _ _ _ _ _ _)), rg) (h2@(Just (Hit t2 _ _ _ _ _ _)), _) =
+    closerHit
+      (h1@(Just (Hit t1 _ _ _ _ _ _)), rg)
+      (h2@(Just (Hit t2 _ _ _ _ _ _)), _) =
       if t1 < t2
-        then (h1, rg)
-        else (h2, rg)
+      then (h1, rg)
+      else (h2, rg)
 hit (Rect rct) r@(Ray ror rdr _) t_min t_max gen =
   case rct of
     (XYRect x0 x1 y0 y1 k rmat) ->
@@ -1128,34 +1128,38 @@ newCamera lookfrom lookat vup vfov aspect aperture focusDist t0 t1 =
       vertical = scale (2 * halfHeight * focusDist) v
    in Camera origin lowerLeftCorner horizontal vertical u v w lensRadius t0 t1
 
+-- TODO: rewrite with foldM over [1..depth]?
 rayColor :: Ray -> Int -> RayTracingM s Albedo
 rayColor ray depth = rayColorHelp ray depth id
   where
     rayColorHelp :: Ray -> Int -> (Albedo -> Albedo) -> RayTracingM s Albedo
     rayColorHelp r d alb_acc =
       if d <= 0
-        then return $ alb_acc (albedo (0.0, 0.0, 0.0))
-        else do
-          htbls <- asks getSceneHittables
-          gRef <- asks getGenRef
-          gen <- lift $ readSTRef gRef
-          case hit htbls r epsilon infinity gen of
-            (Nothing, g1) -> do
-              bgd <- asks getBackground
-              lift $ writeSTRef gRef g1
-              return $ alb_acc bgd
-            (Just h@(Hit _ hp _ hu hv _ hm), g1) -> do
-              lift $ writeSTRef gRef g1
-              let em@(Albedo emv) = emitted hm hu hv hp
-              mscatter <- scatter hm r h
-              case mscatter of
-                Nothing -> return $ alb_acc em
-                Just (sray, Albedo att) ->
-                  rayColorHelp
-                    sray
-                    (d - 1)
-                    (\(Albedo new) ->
-                       alb_acc $ Albedo $ emv `vecAdd` (att `vecMul` new))
+      then return $ alb_acc (albedo (0.0, 0.0, 0.0))
+      else do
+        htbls <- asks getSceneHittables
+        gRef <- asks getGenRef
+        gen <- lift $ readSTRef gRef
+        case hit htbls r epsilon infinity gen of
+          (Nothing, g1) -> do
+            bgd <- asks getBackground
+            lift $ writeSTRef gRef g1
+            return $ alb_acc bgd
+          (Just h@(Hit _ hp _ hu hv _ hm), g1) -> do
+            lift $ writeSTRef gRef g1
+            let em@(Albedo emv) = emitted hm hu hv hp
+            mscatter <- scatter hm r h
+            case mscatter of
+              Nothing -> return $ alb_acc em
+              Just (sray, Albedo att, Pdf pdf) -> rayColorHelp
+                sray
+                (d - 1)
+                (\(Albedo new) -> alb_acc
+                 $ Albedo
+                 $ emv
+                 |+| (att
+                      |*| (scatteringPdf hm r h sray
+                           `scale` (new `divide` pdf))))
 
 sampleColor :: Albedo -> (Double, Double) -> RayTracingM s Albedo
 sampleColor (Albedo accCol) (u, v) = do
