@@ -2,7 +2,10 @@
 {-# LANGUAGE TupleSections #-}
 
 module Lib
-    ( albedo
+    ( (|+|)
+    , (|-|)
+    , (|*|)
+    , albedo
     , boundingBox
     , constantMedium
     , cuboid
@@ -27,9 +30,6 @@ module Lib
     , sphere
     , surroundingBox
     , translate
-    , vecAdd
-    , vecMul
-    , vecSub
     , vecX
     , vecY
     , vecZ
@@ -215,17 +215,20 @@ vecZ (Vec3 _ _ z) =  z
 instance Show Vec3 where
   show (Vec3 x y z) = unwords [show x, show y, show z]
 
-vecMul :: Vec3 -> Vec3 -> Vec3
-vecMul (Vec3 x1 y1 z1) (Vec3 x2 y2 z2) = Vec3 (x1 * x2) (y1 * y2) (z1 * z2)
+infixl 7 |*|
+(|*|) :: Vec3 -> Vec3 -> Vec3
+(|*|) (Vec3 x1 y1 z1) (Vec3 x2 y2 z2) = Vec3 (x1 * x2) (y1 * y2) (z1 * z2)
 
 _vecDiv :: Vec3 -> Vec3 -> Vec3
 _vecDiv (Vec3 x1 y1 z1) (Vec3 x2 y2 z2) = Vec3 (x1 / x2) (y1 / y2) (z1 / z2)
 
-vecAdd :: Vec3 -> Vec3 -> Vec3
-vecAdd (Vec3 x1 y1 z1) (Vec3 x2 y2 z2) = Vec3 (x1 + x2) (y1 + y2) (z1 + z2)
+infixl 7 |+|
+(|+|) :: Vec3 -> Vec3 -> Vec3
+(|+|) (Vec3 x1 y1 z1) (Vec3 x2 y2 z2) = Vec3 (x1 + x2) (y1 + y2) (z1 + z2)
 
-vecSub :: Vec3 -> Vec3 -> Vec3
-vecSub (Vec3 x1 y1 z1) (Vec3 x2 y2 z2) = Vec3 (x1 - x2) (y1 - y2) (z1 - z2)
+infixl 7 |-|
+(|-|) :: Vec3 -> Vec3 -> Vec3
+(|-|) (Vec3 x1 y1 z1) (Vec3 x2 y2 z2) = Vec3 (x1 - x2) (y1 - y2) (z1 - z2)
 
 vecNegate :: Vec3 -> Vec3
 vecNegate (Vec3 x y z) = Vec3 (negate x) (negate y) (negate z)
@@ -289,7 +292,7 @@ data Ray
   deriving (Show)
 
 at :: Ray -> Double -> Point3
-at (Ray orn dr _) t = orn `vecAdd` scale t dr
+at (Ray orn dr _) t = orn |+| scale t dr
 
 data Hit
   = Hit
@@ -743,15 +746,15 @@ emitted (DiffuseLight tex) u v p = textureValue tex u v p
 emitted _ _ _ _                  = albedo (0, 0, 0)
 
 reflect :: Point3 -> Point3 -> Point3
-reflect v n = v `vecSub` scale (2.0 * dot v n) n
+reflect v n = v |-| scale (2.0 * dot v n) n
 
 refract :: Point3 -> Point3 -> Double -> Point3
 refract v n etaiOverEtat =
   let uv = makeUnitVector v
       cosTheta = dot (vecNegate uv) n
-      rOutParallel = scale etaiOverEtat (uv `vecAdd` scale cosTheta n)
+      rOutParallel = scale etaiOverEtat (uv |+| scale cosTheta n)
       rOutPerp = scale (-sqrt (1.0 - squaredLength rOutParallel)) n
-   in rOutParallel `vecAdd` rOutPerp
+   in rOutParallel |+| rOutPerp
 
 -- Christopher Schlick approximation for reflectivity of glass based on angle
 schlick :: Double -> Double -> Double
@@ -763,11 +766,11 @@ schlick cosine ref_idx =
 boundingBox :: Hittable -> Maybe (Time, Time) -> Box
 boundingBox (Sphere c r _) _ =
   let rad = point3 (r, r, r)
-   in Box (c `vecSub` rad) (c `vecAdd` rad)
+   in Box (c |-| rad) (c |+| rad)
 boundingBox (MovingSphere c0 c1 _ _ _ r _) _ =
   let rad = point3 (r, r, r)
-      box0 = Box (c0 `vecSub` rad) (c0 `vecAdd` rad)
-      box1 = Box (c1 `vecSub` rad) (c1 `vecAdd` rad)
+      box0 = Box (c0 |-| rad) (c0 |+| rad)
+      box1 = Box (c1 |-| rad) (c1 |+| rad)
    in surroundingBox box0 box1
 boundingBox (Rect (XYRect x0 x1 y0 y1 k _)) _ =
   Box (point3 (x0, y0, k - epsilon)) (point3 (x1, y1, k + epsilon))
@@ -779,7 +782,7 @@ boundingBox (BVHNode _ _ box) _ = box
 boundingBox (Cuboid c_min c_max _) _ = Box c_min c_max
 boundingBox (Translate offset h) mtime =
   let (Box b_min b_max) = boundingBox h mtime
-   in Box (b_min `vecAdd` offset) (b_max `vecAdd` offset)
+   in Box (b_min |+| offset) (b_max |+| offset)
 boundingBox (Rotate _ _ _ box _) _ = box
 boundingBox (ConstantMedium _ _ h) mt = boundingBox h mt
 
@@ -883,13 +886,13 @@ hit (Rect rct) r@(Ray ror rdr _) t_min t_max gen =
       where
         t = (k - vecK ror) / vecK rdr
 hit (Translate offset h) (Ray ror rdr tm) t_min t_max gen =
-  let m_r = Ray (ror `vecSub` offset) rdr tm
+  let m_r = Ray (ror |-| offset) rdr tm
    in case hit h m_r t_min t_max gen of
         n@(Nothing, _) -> n
         (Just (Hit t p outwardNormal rec_u rec_v _ mat), g1) ->
           let (mFrontFace, mNormal) = faceNormal m_r outwardNormal
            in ( Just
-                  (Hit t (p `vecAdd` offset) mNormal rec_u rec_v mFrontFace mat)
+                  (Hit t (p |+| offset) mNormal rec_u rec_v mFrontFace mat)
               , g1)
 hit (Rotate axis sin_theta cos_theta _ h) (Ray ror rdr tm) t_min t_max gen =
   let rotated_r =
@@ -944,7 +947,7 @@ hit (Sphere sc sr sm) r@(Ray ror rdr _) t_min t_max gen =
                 | otherwise -> (Nothing, gen)
     else (Nothing, gen)
   where
-    oc = ror `vecSub` sc
+    oc = ror |-| sc
     a = dot rdr rdr
     b = seq oc (dot oc rdr)
     c = seq sr (dot oc oc - (sr * sr))
@@ -952,7 +955,7 @@ hit (Sphere sc sr sm) r@(Ray ror rdr _) t_min t_max gen =
     recHit :: Double -> Hit
     recHit temp =
       let p = r `at` temp
-          pShift = p `vecSub` sc
+          pShift = p |-| sc
           outwardNormal = divide pShift sr
           (frontFace, normal) = faceNormal r outwardNormal
           phi = atan2 (vecZ outwardNormal) (vecX outwardNormal)
@@ -960,7 +963,7 @@ hit (Sphere sc sr sm) r@(Ray ror rdr _) t_min t_max gen =
           (u, v) = (1.0 - ((phi + pi) / (2 * pi)), (theta + (pi / 2)) / pi)
        in Hit temp p normal u v frontFace sm
 hit (MovingSphere c0 c1 t0 _ tp sr sm) r@(Ray _ _ t) t_min t_max gen =
-  let sc = c0 `vecAdd` scale ((t - t0) / tp) (c1 `vecSub` c0)
+  let sc = c0 |+| scale ((t - t0) / tp) (c1 |-| c0)
   in hit (Sphere sc sr sm) r t_min t_max gen
 
 faceNormal :: Ray -> Point3 -> (Bool, Point3)
@@ -1017,7 +1020,7 @@ randomInUnitSphere gen =
   let (x, g1) = randomDouble gen
       (y, g2) = randomDouble g1
       (z, g3) = randomDouble g2
-      p = scale 2.0 (point3 (x, y, z)) `vecSub` point3 (1.0, 1.0, 1.0)
+      p = scale 2.0 (point3 (x, y, z)) |-| point3 (1.0, 1.0, 1.0)
    in if squaredLength p < 1.0
         then (p, g3)
         else randomInUnitSphere g3
@@ -1034,7 +1037,7 @@ randomInUnitDisk :: RandGen -> (Vec3, RandGen)
 randomInUnitDisk gen =
   let (x, g1) = randomDouble gen
       (y, g2) = randomDouble g1
-      p = scale 2.0 (point3 (x, y, 0)) `vecSub` point3 (1.0, 1.0, 0)
+      p = scale 2.0 (point3 (x, y, 0)) |-| point3 (1.0, 1.0, 0)
    in if squaredLength p < 1.0
         then (p, g2)
         else randomInUnitDisk g2
@@ -1085,15 +1088,15 @@ getRay :: Camera -> Double -> Double -> RandomState s Ray
 getRay (Camera c_or c_llc c_horiz c_vert c_u c_v _ c_lr c_time0 c_time1) s t =
   do
     rd <- fmap (scale c_lr) randomInUnitDiskM
-    let offset = scale (vecX rd) c_u `vecAdd` scale (vecY rd) c_v
+    let offset = scale (vecX rd) c_u |+| scale (vecY rd) c_v
     tm <- randomDoubleRM c_time0 c_time1
     return $ Ray
-      (c_or `vecAdd` offset)
+      (c_or |+| offset)
       (        c_llc
-      `vecAdd` scale s c_horiz
-      `vecAdd` scale t c_vert
-      `vecSub` c_or
-      `vecSub` offset
+      |+| scale s c_horiz
+      |+| scale t c_vert
+      |-| c_or
+      |-| offset
       )
       tm
 
@@ -1114,12 +1117,12 @@ newCamera lookfrom lookat vup vfov aspect aperture focusDist t0 t1 =
       halfHeight = tan (theta / 2.0)
       halfWidth = aspect * halfHeight
       origin = lookfrom
-      w = makeUnitVector (lookfrom `vecSub` lookat)
+      w = makeUnitVector (lookfrom |-| lookat)
       u = makeUnitVector (cross vup w)
       v = cross w u
       lowerLeftCorner =
-        origin `vecSub` scale (halfWidth * focusDist) u `vecSub`
-        scale (halfHeight * focusDist) v `vecSub`
+        origin |-| scale (halfWidth * focusDist) u |-|
+        scale (halfHeight * focusDist) v |-|
         scale focusDist w
       horizontal = scale (2 * halfWidth * focusDist) u
       vertical = scale (2 * halfHeight * focusDist) v
@@ -1160,7 +1163,7 @@ sampleColor (Albedo accCol) (u, v) = do
   r <- getRay camera u v
   maxDepth <- asks getMaxDepth
   (Albedo c1) <- rayColor r maxDepth
-  return $ Albedo $ accCol `vecAdd` c1
+  return $ Albedo $ accCol |+| c1
 
 renderPos :: RenderStaticEnv -> STRef s RandGen -> [(Double, Double)] -> ST s Albedo
 renderPos staticEnv genRef samples =

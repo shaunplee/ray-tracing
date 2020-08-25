@@ -279,7 +279,7 @@ makeRandomSceneBookOne gen = runST $ do
       py <- randomDoubleM
       let center =
             point3 (fromIntegral a + 0.9 * px, 0.2, fromIntegral b + 0.9 * py)
-      if Lib.length (center `vecSub` point3 (4.0, 0.2, 0)) <= 0.9
+      if Lib.length (center |-| point3 (4.0, 0.2, 0)) <= 0.9
         then return Nothing
         else
           if
@@ -287,7 +287,7 @@ makeRandomSceneBookOne gen = runST $ do
                 do
                   a1 <- randomVec3DoubleM
                   a2 <- randomVec3DoubleM
-                  let alb = Albedo $ a1 `vecMul` a2
+                  let alb = Albedo $ a1 |*| a2
                   return $ Just $ sphere center 0.2 (Lambertian (ConstantColor alb))
               | mat < 0.95 -> -- Metal
                 do
@@ -359,7 +359,7 @@ makeRandomScene earthtex _ _ gen =
       py <- randomDoubleM
       let center =
             point3 (fromIntegral a + 0.9 * px, 0.2, fromIntegral b + 0.9 * py)
-      if Lib.length (center `vecSub` point3 (4.0, 0.2, 0)) <= 0.9
+      if Lib.length (center |-| point3 (4.0, 0.2, 0)) <= 0.9
         then return Nothing
         else if | mat < 0.8 -- Diffuse
                  ->
@@ -367,12 +367,12 @@ makeRandomScene earthtex _ _ gen =
                      a2 <- randomVec3DoubleM
                      sph_move_x <- randomDoubleRM (-0.25) 0.25
                      sph_move_z <- randomDoubleRM (-0.25) 0.25
-                     let alb = Albedo $ a1 `vecMul` a2
+                     let alb = Albedo $ a1 |*| a2
                      return $
                        Just $
                        movingSphere
                          center
-                         (center `vecAdd` point3 (sph_move_x, 0, sph_move_z))
+                         (center |+| point3 (sph_move_x, 0, sph_move_z))
                          0.0
                          1.0
                          0.2
