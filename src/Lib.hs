@@ -355,17 +355,25 @@ instance NFData Albedo where
 
 data Pdf = CosinePdf ONB
          | HittablePdf Point3 Hittable
+         | MixturePdf {mixPdf1 :: Pdf, mixPdf2 :: Pdf}
   deriving Show
 
 pdfGenerate :: Pdf -> RandomState s Vec3
 pdfGenerate (CosinePdf uvw) = fmap (onbLocalV uvw) randomCosineDirection
 pdfGenerate (HittablePdf o htbl) = htblRandom htbl o
+pdfGenerate (MixturePdf pdf1 pdf2) = do
+  rd <- randomDoubleM
+  if rd < 0.5 then pdfGenerate pdf1 else pdfGenerate pdf2
 
 pdfValue :: Pdf -> Vec3 -> RandomState s Double
 pdfValue (CosinePdf uvw) direction =
   let cosine = dot (makeUnitVector direction) (onbW uvw)
   in return $ if cosine <= 0 then 0 else cosine / pi
 pdfValue (HittablePdf o htbl) direction = htblPdfValue htbl o direction
+pdfValue (MixturePdf pdf1 pdf2) direction = do
+  v1 <- pdfValue pdf1 direction
+  v2 <- pdfValue pdf2 direction
+  return $ 0.5 * (v1 + v2)
 
 newtype Image = Image (JP.Image JP.PixelRGB8)
 
@@ -1257,11 +1265,11 @@ rayColor ray depth = rayColorHelp ray depth id
                         554
                         (Lambertian $ ConstantColor (albedo (0, 0, 0)))
                 let htblPdf = HittablePdf hp lightShape
-                htblPdfD <- pdfGenerate htblPdf
-                -- let cosinePdf = CosinePdf $ onbFromW hn
-                -- cPdfD <- pdfGenerate cosinePdf
-                let scattered = Ray hp (makeUnitVector htblPdfD) rtime
-                pdfVal <- pdfValue htblPdf (makeUnitVector htblPdfD)
+                let cosinePdf = CosinePdf $ onbFromW hn
+                let mixPdf = MixturePdf htblPdf cosinePdf
+                pdfD <- pdfGenerate mixPdf
+                let scattered = Ray hp (makeUnitVector pdfD) rtime
+                pdfVal <- pdfValue mixPdf (makeUnitVector pdfD)
                 rayColorHelp
                   scattered
                   (d - 1)
