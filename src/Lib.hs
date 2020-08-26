@@ -353,8 +353,19 @@ albedo (r, g, b) = Albedo $ Vec3 r g b
 instance NFData Albedo where
   rnf (Albedo v) = rnf v `seq` ()
 
-newtype Pdf = Pdf Double
+data Pdf = CosinePdf ONB
+         | HittablePdf Point3 Hittable
   deriving Show
+
+pdfGenerate :: Pdf -> RandomState s Vec3
+pdfGenerate (CosinePdf uvw) = fmap (onbLocalV uvw) randomCosineDirection
+pdfGenerate (HittablePdf o htbl) = htblRandom htbl o
+
+pdfValue :: Pdf -> Vec3 -> RandomState s Double
+pdfValue (CosinePdf uvw) direction =
+  let cosine = dot (makeUnitVector direction) (onbW uvw)
+  in return $ if cosine <= 0 then 0 else cosine / pi
+pdfValue (HittablePdf o htbl) direction = htblPdfValue htbl o direction
 
 newtype Image = Image (JP.Image JP.PixelRGB8)
 
@@ -631,6 +642,30 @@ rect XYPlane x0 x1 y0 y1 k mat = Rect $ XYRect x0 x1 y0 y1 k mat
 rect XZPlane x0 x1 z0 z1 k mat = Rect $ XZRect x0 x1 z0 z1 k mat
 rect YZPlane y0 y1 z0 z1 k mat = Rect $ YZRect y0 y1 z0 z1 k mat
 
+htblPdfValue :: Hittable -> Point3 -> Vec3 -> RandomState s Double
+htblPdfValue htbl@(Rect (XZRect x0 x1 z0 z1 k _) ) origin v = do
+  genRef <- asks getGenRef
+  g1 <- lift $ readSTRef genRef
+  case hit htbl (Ray origin v 0.0) epsilon infinity g1 of
+    (Nothing, g2) -> do
+      lift $ writeSTRef genRef g2
+      return 0.0
+    (Just h@(Hit ht _ hn _ _ _ _), g2) -> do
+      let area = (x1 - x0) * (z1 - z0)
+      let distanceSquared = ht * ht * squaredLength v
+      let cosine = abs $ dot v hn / Lib.length v
+      lift $ writeSTRef genRef g2
+      return $ distanceSquared / (cosine * area)
+htblPdfValue _ _ _ = return 0.0
+
+htblRandom :: Hittable -> Vec3 -> RandomState s Vec3
+htblRandom (Rect (XZRect x0 x1 z0 z1 k _) ) o = do
+  rx <- randomDoubleRM x0 x1
+  rz <- randomDoubleRM z0 z1
+  let rp = point3 (rx, k, rz)
+  return $ rp |-| o
+htblRandom _ _ = return $ Vec3 1 0 0
+
 translate :: Point3 -> Hittable -> Hittable
 translate = Translate
 
@@ -723,7 +758,7 @@ boxRayIntersect (Box (Vec3 minX minY minZ) (Vec3 maxX maxY maxZ)) (Ray (Vec3 orX
 
 type Time = Double
 
-scatter :: Material -> Ray -> Hit -> RandomState s (Maybe (Ray, Albedo, Pdf))
+scatter :: Material -> Ray -> Hit -> RandomState s (Maybe (Ray, Albedo, Double))
 scatter (Lambertian tex) (Ray _ _ rtime) (Hit _ hp hn hu hv _ _) = do
   -- rUnit <- randomUnitVectorM
   rCosDir <- randomCosineDirection
@@ -731,7 +766,7 @@ scatter (Lambertian tex) (Ray _ _ rtime) (Hit _ hp hn hu hv _ _) = do
   let direction = onbLocalV uvw rCosDir
   let scatterDirection = makeUnitVector direction
   let scattered = Ray hp scatterDirection rtime
-  let pdf = Pdf $ (dot (onbW uvw) scatterDirection) / pi
+  let pdf = (dot (onbW uvw) scatterDirection) / pi
   -- let pdf = Pdf $ 0.5 / pi
   return $ Just (scattered, textureValue tex hu hv hp, pdf)
 scatter (Metal tex (Fuzz fuzz)) (Ray _ rdr rtime) (Hit _ hp hn hu hv _ _) = do
@@ -741,7 +776,7 @@ scatter (Metal tex (Fuzz fuzz)) (Ray _ rdr rtime) (Hit _ hp hn hu hv _ _) = do
         Ray hp (reflected |+| scale fuzz rUnit) rtime
   return $
     if dot scat_dir hn > 0.0
-      then Just (scattered, textureValue tex hu hv hp, Pdf 1)
+      then Just (scattered, textureValue tex hu hv hp, 1)
       else Nothing
 scatter (Dielectric (RefractiveIdx ref_idx)) (Ray _ rdr rtime) (Hit _ hp hn _ _ hff _) = do
   let alb = albedo (1.0, 1.0, 1.0)
@@ -756,15 +791,15 @@ scatter (Dielectric (RefractiveIdx ref_idx)) (Ray _ rdr rtime) (Hit _ hp hn _ _ 
   return $
     if (etaiOverEtat * sinTheta > 1.0) || rd < schlick cosTheta etaiOverEtat
       then let reflected = reflect unitDirection hn
-            in Just (Ray hp reflected rtime, alb, Pdf 1)
+            in Just (Ray hp reflected rtime, alb, 1)
       else let refracted = refract unitDirection hn etaiOverEtat
-            in Just (Ray hp refracted rtime, alb, Pdf 1)
+            in Just (Ray hp refracted rtime, alb, 1)
 scatter DiffuseLight {} _ _  = return Nothing
 scatter (Isotropic tex) (Ray _ _ rtime) (Hit _ hp _ hu hv _ _) = do
   randDr <- randomInUnitSphereM
   let scattered = Ray hp randDr rtime
   let attenuation = textureValue tex hu hv hp
-  return $ Just (scattered, attenuation, Pdf 1)
+  return $ Just (scattered, attenuation, 1)
 
 scatteringPdf :: Material -> Ray -> Hit -> Ray -> Double
 scatteringPdf
@@ -1190,11 +1225,11 @@ newCamera lookfrom lookat vup vfov aspect aperture focusDist t0 t1 =
    in Camera origin lowerLeftCorner horizontal vertical u v w lensRadius t0 t1
 
 -- TODO: rewrite with foldM over [1..depth]?
-rayColor :: Ray -> Int -> RayTracingM s Albedo
+rayColor  :: Ray -> Int -> RayTracingM s Albedo
 rayColor ray depth = rayColorHelp ray depth id
   where
     rayColorHelp :: Ray -> Int -> (Albedo -> Albedo) -> RayTracingM s Albedo
-    rayColorHelp r d alb_acc =
+    rayColorHelp r@(Ray _ _ rtime) d alb_acc =
       if d <= 0
       then return $ alb_acc (albedo (0.0, 0.0, 0.0))
       else do
@@ -1212,15 +1247,30 @@ rayColor ray depth = rayColorHelp ray depth id
             mscatter <- scatter hm r h
             case mscatter of
               Nothing -> return $ alb_acc em
-              Just (sray, Albedo att, Pdf pdf) -> rayColorHelp
-                sray
-                (d - 1)
-                (\(Albedo new) -> alb_acc
-                 $ Albedo
-                 $ emv
-                 |+| (att
-                      |*| (scatteringPdf hm r h sray
-                           `scale` (new `divide` pdf))))
+              Just (_, Albedo att, _) -> do
+                let lightShape = Rect
+                      $ XZRect
+                        213
+                        343
+                        227
+                        332
+                        554
+                        (Lambertian $ ConstantColor (albedo (0, 0, 0)))
+                let htblPdf = HittablePdf hp lightShape
+                htblPdfD <- pdfGenerate htblPdf
+                -- let cosinePdf = CosinePdf $ onbFromW hn
+                -- cPdfD <- pdfGenerate cosinePdf
+                let scattered = Ray hp (makeUnitVector htblPdfD) rtime
+                pdfVal <- pdfValue htblPdf (makeUnitVector htblPdfD)
+                rayColorHelp
+                  scattered
+                  (d - 1)
+                  (\(Albedo new) -> alb_acc
+                   $ Albedo
+                   $ emv
+                   |+| (att
+                        |*| (scatteringPdf hm r h scattered
+                             `scale` (new `divide` pdfVal))))
 
 sampleColor :: Albedo -> (Double, Double) -> RayTracingM s Albedo
 sampleColor (Albedo accCol) (u, v) = do
