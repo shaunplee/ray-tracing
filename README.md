@@ -21,3 +21,6 @@ using 2 cores:
       214.64  system
      1:54:34  elapsed
         395%  CPU
+
+## The Rest of Your Life
+![Final scene](./cornellBox1000.png)

@@ -865,23 +865,17 @@ scatter (Isotropic tex) (Ray _ _ rtime) (Hit _ hp _ hu hv _ _) = do
   return $ Just (ScatterRecord scattered False attenuation 1.0)
 
 scatteringPdf :: Material -> Ray -> Hit -> Ray -> Double
-scatteringPdf
-  (Lambertian _)
-  _
-  (Hit _ _ recNormal _ _ _ _)
-  (Ray _ scatteredDirection _) =
-  let cosine = dot recNormal scatteredDirection
-  in if cosine < 0
-     then 0
-     else cosine / pi
 scatteringPdf (Metal _ _) _ _ _ =
   error "Metal does not support scatteringPdf"
 scatteringPdf (Dielectric _) _ _ _ =
   error "Dielectric does not support scatteringPdf"
 scatteringPdf (DiffuseLight _) _ _ _ =
   error "DiffuseLight does not support scatteringPdf"
-scatteringPdf (Isotropic _) _ _ _ =
-  error "Isotropic does not support scatteringPdf"
+scatteringPdf _  _ (Hit _ _ recNormal _ _ _ _) (Ray _ scatteredDirection _) =
+  let cosine = dot recNormal scatteredDirection
+  in if cosine < 0
+     then 0
+     else cosine / pi
 
 emitted :: Material -> Ray -> Hit -> Double -> Double -> Point3 -> Albedo
 emitted (DiffuseLight tex) _ (Hit _ _ _ _ _ ff _) u v p =

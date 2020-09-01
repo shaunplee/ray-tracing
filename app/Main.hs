@@ -17,7 +17,7 @@ defaultnThreads = 2
 
 -- Number of samples to use when anti-aliasing
 defaultNs :: Int
-defaultNs = 200
+defaultNs = 1000
 
 -- maximum number of reflections
 defaultMaxDepth :: Int
