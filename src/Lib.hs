@@ -79,8 +79,9 @@ epsilon = 0.0001
 infinity :: Double
 infinity = read "Infinity" :: Double
 
--- A scene should be a BVHNode, which is a Hittable, and background color
-type Scene = (Hittable, Albedo)
+-- A scene should be a BVHNode of objects, a BVHNode of lights
+-- (BVHNodes are a Hittable), and background color
+type Scene = (Hittable, Hittable, Albedo)
 
 -- Use the ST monad to thread the random number generator
 type RandomState s = ReaderT (RenderEnv s) (ST s)
@@ -142,6 +143,7 @@ dummyRenderStaticEnv =
             (point3 (0, 0, 0))
             1.0
             (Lambertian $ ConstantColor $ albedo (0, 1.0, 1.0))
+        , Unhittable
         , albedo (0, 0, 0))
    in mkRenderStaticEnv world dummyCamera (0, 0) 0 0 0
 
@@ -150,11 +152,15 @@ dummyRenderEnv = mkRenderEnv dummyRenderStaticEnv
 
 getSceneHittables :: RenderEnv s -> Hittable
 getSceneHittables
-  (RenderEnv (RenderStaticEnv ((scn, _), _, _, _, _, _, _), _)) = scn
+  (RenderEnv (RenderStaticEnv ((scn, _, _), _, _, _, _, _, _), _)) = scn
+
+getSceneLights :: RenderEnv s -> Hittable
+getSceneLights
+  (RenderEnv (RenderStaticEnv ((_, lights, _), _, _, _, _, _, _), _)) = lights
 
 getBackground :: RenderEnv s -> Albedo
-getBackground (RenderEnv (RenderStaticEnv ((_, bkgd), _, _, _, _, _, _), _)) =
-  bkgd
+getBackground
+  (RenderEnv (RenderStaticEnv ((_, _, bkgd), _, _, _, _, _, _), _)) = bkgd
 
 getCamera :: RenderEnv s -> Camera
 getCamera (RenderEnv (RenderStaticEnv (_, cam, _, _, _, _, _), _)) = cam
@@ -550,6 +556,8 @@ data Hittable
       -- ^ bvh_right
       !Box
       -- ^ bvh_box
+      !Int
+      -- ^^ bvh_size
   | Translate
       !Point3
       -- ^ translation offset
@@ -573,6 +581,7 @@ data Hittable
       -- ^ material of the constant medium
       !Hittable
       -- ^ the shape of the constant medium
+  | Unhittable
   deriving (Show)
 
 sphere :: Point3 -> Double -> Material -> Hittable
@@ -650,21 +659,50 @@ rect XYPlane x0 x1 y0 y1 k mat = Rect $ XYRect x0 x1 y0 y1 k mat
 rect XZPlane x0 x1 z0 z1 k mat = Rect $ XZRect x0 x1 z0 z1 k mat
 rect YZPlane y0 y1 z0 z1 k mat = Rect $ YZRect y0 y1 z0 z1 k mat
 
+htblSize :: Hittable -> Int
+htblSize Unhittable = 0
+htblSize (Sphere {}) = 1
+htblSize (MovingSphere {}) = 1
+htblSize (Rect {}) = 1
+htblSize (Cuboid {}) = 1
+htblSize (ConstantMedium _ _ _) = 1
+htblSize (Translate _ htbl) = htblSize htbl
+htblSize (Rotate _ _ _ _ htbl) = htblSize htbl
+htblSize (BVHNode _ _ _ size) = size
+
 htblPdfValue :: Hittable -> Point3 -> Vec3 -> RandomState s Double
-htblPdfValue htbl@(Rect (XZRect x0 x1 z0 z1 k _) ) origin v = do
+htblPdfValue htbl origin v = do
   genRef <- asks getGenRef
   g1 <- lift $ readSTRef genRef
   case hit htbl (Ray origin v 0.0) epsilon infinity g1 of
     (Nothing, g2) -> do
       lift $ writeSTRef genRef g2
       return 0.0
-    (Just h@(Hit ht _ hn _ _ _ _), g2) -> do
-      let area = (x1 - x0) * (z1 - z0)
-      let distanceSquared = ht * ht * squaredLength v
-      let cosine = abs $ dot v hn / Lib.length v
+    (Just (Hit ht _ hn _ _ _ _), g2) -> do
       lift $ writeSTRef genRef g2
-      return $ distanceSquared / (cosine * area)
-htblPdfValue _ _ _ = return 0.0
+      case htbl of
+        (Rect (XZRect x0 x1 z0 z1 _ _))
+          -> let area = (x1 - x0) * (z1 - z0)
+                 distanceSquared = ht * ht * squaredLength v
+                 cosine = abs $ dot v hn / Lib.length v
+             in return $ distanceSquared / (cosine * area)
+        (Sphere center radius _)
+          -> let cosThetaMax = sqrt
+                   (1 - radius * radius / squaredLength (center |-| origin))
+                 solidAngle = 2 * pi * (1 - cosThetaMax)
+             in return $ 1 / solidAngle
+        (BVHNode bvh_left bvh_right _ size) -> do
+          leftPdf <- foldPdf 0 bvh_left
+          let leftWeight = fromIntegral (htblSize bvh_left)
+                / fromIntegral size
+          rightPdf <- foldPdf 0 bvh_right
+          let rightWeight = fromIntegral (htblSize bvh_right)
+                / fromIntegral size
+          return $ leftWeight * leftPdf + rightWeight * rightPdf
+        _ -> return 0.0
+  where
+    foldPdf :: Double -> Hittable -> RandomState s Double
+    foldPdf acc h = fmap (+ acc) $ htblPdfValue h origin v
 
 htblRandom :: Hittable -> Vec3 -> RandomState s Vec3
 htblRandom (Rect (XZRect x0 x1 z0 z1 k _) ) o = do
@@ -672,6 +710,17 @@ htblRandom (Rect (XZRect x0 x1 z0 z1 k _) ) o = do
   rz <- randomDoubleRM z0 z1
   let rp = point3 (rx, k, rz)
   return $ rp |-| o
+htblRandom (Sphere center rad _) o = do
+  let dir = center |-| o
+  let distSquared = squaredLength dir
+  let uvw = onbFromW dir
+  rts <- randomToSphereM rad distSquared
+  return $ onbLocalV uvw rts
+htblRandom (BVHNode bvh_left bvh_right _ size) o = do
+  rd <- randomDoubleM
+  if rd < (fromIntegral $ htblSize bvh_left) / (fromIntegral size)
+    then htblRandom bvh_left o
+    else htblRandom bvh_right o
 htblRandom _ _ = return $ Vec3 1 0 0
 
 translate :: Point3 -> Hittable -> Hittable
@@ -766,48 +815,54 @@ boxRayIntersect (Box (Vec3 minX minY minZ) (Vec3 maxX maxY maxZ)) (Ray (Vec3 orX
 
 type Time = Double
 
-scatter :: Material -> Ray -> Hit -> RandomState s (Maybe (Ray, Albedo, Double))
+
+data ScatterRecord = ScatterRecord Ray Bool Albedo Double
+  deriving Show
+
+scatter :: Material -> Ray -> Hit -> RandomState s (Maybe ScatterRecord)
 scatter (Lambertian tex) (Ray _ _ rtime) (Hit _ hp hn hu hv _ _) = do
   -- rUnit <- randomUnitVectorM
-  rCosDir <- randomCosineDirection
-  let uvw = onbFromW hn
-  let direction = onbLocalV uvw rCosDir
-  let scatterDirection = makeUnitVector direction
-  let scattered = Ray hp scatterDirection rtime
-  let pdf = (dot (onbW uvw) scatterDirection) / pi
-  -- let pdf = Pdf $ 0.5 / pi
-  return $ Just (scattered, textureValue tex hu hv hp, pdf)
+  -- let direction = onbLocalV uvw rCosDir
+  -- let scatterDirection = makeUnitVector direction
+  -- let scattered = Ray hp scatterDirection rtime
+  let att = textureValue tex hu hv hp
+  lights <- asks getSceneLights
+  let lightsPdf = HittablePdf hp lights
+  let cosinePdf = CosinePdf $ onbFromW hn
+  let mixPdf = MixturePdf lightsPdf cosinePdf
+  pdfD <- pdfGenerate mixPdf
+  let scattered = Ray hp (makeUnitVector pdfD) rtime
+  pdfVal <- pdfValue mixPdf (makeUnitVector pdfD)
+  return $ Just $ ScatterRecord scattered False att pdfVal
 scatter (Metal tex (Fuzz fuzz)) (Ray _ rdr rtime) (Hit _ hp hn hu hv _ _) = do
   rUnit <- randomUnitVectorM
   let reflected = reflect (makeUnitVector rdr) hn
-  let scattered@(Ray _ scat_dir _) =
-        Ray hp (reflected |+| scale fuzz rUnit) rtime
-  return $
-    if dot scat_dir hn > 0.0
-      then Just (scattered, textureValue tex hu hv hp, 1)
-      else Nothing
-scatter (Dielectric (RefractiveIdx ref_idx)) (Ray _ rdr rtime) (Hit _ hp hn _ _ hff _) = do
+  let scattered = Ray hp (reflected |+| scale fuzz rUnit) rtime
+  return $ Just $ ScatterRecord scattered True (textureValue tex hu hv hp) 0.0
+scatter
+  (Dielectric (RefractiveIdx ref_idx))
+  (Ray _ rdr rtime)
+  (Hit _ hp hn _ _ hff _) = do
   let alb = albedo (1.0, 1.0, 1.0)
-  let etaiOverEtat =
-        if hff
-          then 1.0 / ref_idx
-          else ref_idx
+  let etaiOverEtat = if hff
+                     then 1.0 / ref_idx
+                     else ref_idx
   let unitDirection = makeUnitVector rdr
   let cosTheta = min (dot (vecNegate unitDirection) hn) 1.0
   let sinTheta = sqrt (1.0 - cosTheta * cosTheta)
   rd <- randomDoubleM
-  return $
-    if (etaiOverEtat * sinTheta > 1.0) || rd < schlick cosTheta etaiOverEtat
+  return
+    $ if (etaiOverEtat * sinTheta > 1.0) || rd < schlick cosTheta etaiOverEtat
       then let reflected = reflect unitDirection hn
-            in Just (Ray hp reflected rtime, alb, 1)
+           in Just (ScatterRecord (Ray hp reflected rtime) True alb 1.0)
       else let refracted = refract unitDirection hn etaiOverEtat
-            in Just (Ray hp refracted rtime, alb, 1)
+           in Just (ScatterRecord (Ray hp refracted rtime) True alb 1.0)
 scatter DiffuseLight {} _ _  = return Nothing
 scatter (Isotropic tex) (Ray _ _ rtime) (Hit _ hp _ hu hv _ _) = do
   randDr <- randomInUnitSphereM
   let scattered = Ray hp randDr rtime
   let attenuation = textureValue tex hu hv hp
-  return $ Just (scattered, attenuation, 1)
+  return $ Just (ScatterRecord scattered False attenuation 1.0)
 
 scatteringPdf :: Material -> Ray -> Hit -> Ray -> Double
 scatteringPdf
@@ -868,13 +923,14 @@ boundingBox (Rect (XZRect x0 x1 z0 z1 k _)) _ =
   Box (point3 (x0, k - epsilon, z0)) (point3 (x1, k + epsilon, z1))
 boundingBox (Rect (YZRect y0 y1 z0 z1 k _)) _ =
   Box (point3 (k - epsilon, y0, z0)) (point3 (k + epsilon, y1, z1))
-boundingBox (BVHNode _ _ box) _ = box
+boundingBox (BVHNode _ _ box _) _ = box
 boundingBox (Cuboid c_min c_max _) _ = Box c_min c_max
 boundingBox (Translate offset h) mtime =
   let (Box b_min b_max) = boundingBox h mtime
    in Box (b_min |+| offset) (b_max |+| offset)
 boundingBox (Rotate _ _ _ box _) _ = box
 boundingBox (ConstantMedium _ _ h) mt = boundingBox h mt
+boundingBox (Unhittable) _ = error "Should not be trying to bound an Unhittable"
 
 surroundingBox :: Box -> Box -> Box
 surroundingBox (Box b0min b0max) (Box b1min b1max) =
@@ -908,7 +964,7 @@ makeBVH mtime htbls = do
         return (lt, rt)
   let bvh_bx =
         surroundingBox (boundingBox bvh_lt mtime) (boundingBox bvh_rt mtime)
-  return (BVHNode bvh_lt bvh_rt bvh_bx)
+  return (BVHNode bvh_lt bvh_rt bvh_bx (S.length htbls))
 
 boxCompare ::
      (Vec3 -> Double) -> Maybe (Time, Time) -> Hittable -> Hittable -> Ordering
@@ -918,7 +974,7 @@ boxCompare compAxis mtime boxa boxb =
    in compare (compAxis bmA) (compAxis bmB)
 
 hit :: Hittable -> Ray -> Double -> Double -> RandGen -> (Maybe Hit, RandGen)
-hit (BVHNode bvh_l bvh_r box) r t_min t_max gen =
+hit (BVHNode bvh_l bvh_r box _) r t_min t_max gen =
   if boxRayIntersect box r t_min t_max
      -- try to hit left branch
     then case hit bvh_l r t_min t_max gen
@@ -1056,6 +1112,7 @@ hit (Sphere sc sr sm) r@(Ray ror rdr _) t_min t_max gen =
 hit (MovingSphere c0 c1 t0 _ tp sr sm) r@(Ray _ _ t) t_min t_max gen =
   let sc = c0 |+| scale ((t - t0) / tp) (c1 |-| c0)
   in hit (Sphere sc sr sm) r t_min t_max gen
+hit Unhittable _ _ _ gen = (Nothing, gen)
 
 faceNormal :: Ray -> Point3 -> (Bool, Point3)
 faceNormal (Ray _ rdr _) outwardNormal =
@@ -1165,6 +1222,17 @@ randomCosineDirection = do
   let y = sin phi * sqrt r2
   return $ point3 (x, y, z)
 
+randomToSphereM :: Double -> Double -> RandomState s Vec3
+randomToSphereM radius distSquared = do
+  r1 <- randomDoubleM
+  r2 <- randomDoubleM
+  let z = 1 + r2 * (sqrt (1 - radius * radius / distSquared) - 1)
+  let phi = 2 * pi * r1
+  let oneMinusZSquared = sqrt (1 - z * z)
+  let x = cos phi * oneMinusZSquared
+  let y = sin phi * oneMinusZSquared
+  return $ Vec3 x y z
+
 data Camera
   = Camera
       !Point3
@@ -1251,34 +1319,24 @@ rayColor ray depth = rayColorHelp ray depth id
             return $ alb_acc bgd
           (Just h@(Hit _ hp hn hu hv _ hm), g1) -> do
             lift $ writeSTRef gRef g1
-            let em@(Albedo emv) = emitted hm r h hu hv hp
             mscatter <- scatter hm r h
             case mscatter of
-              Nothing -> return $ alb_acc em
-              Just (_, Albedo att, _) -> do
-                let lightShape = Rect
-                      $ XZRect
-                        213
-                        343
-                        227
-                        332
-                        554
-                        (Lambertian $ ConstantColor (albedo (0, 0, 0)))
-                let htblPdf = HittablePdf hp lightShape
-                let cosinePdf = CosinePdf $ onbFromW hn
-                let mixPdf = MixturePdf htblPdf cosinePdf
-                pdfD <- pdfGenerate mixPdf
-                let scattered = Ray hp (makeUnitVector pdfD) rtime
-                pdfVal <- pdfValue mixPdf (makeUnitVector pdfD)
-                rayColorHelp
-                  scattered
-                  (d - 1)
-                  (\(Albedo new) -> alb_acc
-                   $ Albedo
-                   $ emv
-                   |+| (att
-                        |*| (scatteringPdf hm r h scattered
-                             `scale` (new `divide` pdfVal))))
+              Nothing -> return $ alb_acc $ emitted hm r h hu hv hp
+              Just (ScatterRecord newRay specular (Albedo att) pdfVal)
+                -> if specular
+                   then rayColorHelp
+                     newRay
+                     (d - 1)
+                     (\(Albedo new)
+                      -> alb_acc $ Albedo (att |*| new))
+                   else rayColorHelp
+                     newRay
+                     (d - 1)
+                     (\(Albedo new) -> alb_acc
+                      $ Albedo
+                        (att
+                         |*| (scatteringPdf hm r h newRay
+                              `scale` (new `divide` pdfVal))))
 
 sampleColor :: Albedo -> (Double, Double) -> RayTracingM s Albedo
 sampleColor (Albedo accCol) (u, v) = do

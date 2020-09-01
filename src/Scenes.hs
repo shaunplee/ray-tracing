@@ -33,50 +33,61 @@ makeCornellBoxScene :: Time -> Time -> RandGen -> (Scene, RandGen)
 makeCornellBoxScene t0 t1 gen = runST
   $ do
     gRef <- newSTRef gen
+    let red = Lambertian $ ConstantColor (albedo (0.65, 0.05, 0.05))
+    let white = Lambertian $ ConstantColor (albedo (0.73, 0.73, 0.73))
+    let green = Lambertian $ ConstantColor (albedo (0.12, 0.45, 0.15))
+    let aluminum = Metal (ConstantColor (albedo (0.8, 0.85, 0.88))) (Fuzz 0.0)
+    let light = DiffuseLight $ ConstantColor (albedo (15, 15, 15))
+    let lightHittable = rect XZPlane 213 343 227 332 554 light
+    let box1 = translate
+          (point3 (265, 0, 295))
+          (rotate
+             YAxis
+             15
+             (cuboid (point3 (0, 0, 0)) (point3 (165, 330, 165)) white))
+    let box2 = translate
+          (point3 (130, 0, 65))
+          (rotate YAxis (-18)
+           $ cuboid (point3 (0, 0, 0)) (point3 (165, 165, 165)) white)
+    let glassSphere =
+          sphere (point3 (190, 90, 190)) 90 (Dielectric (RefractiveIdx 1.5))
     world <- runReaderT
       (do
-         let red = Lambertian $ ConstantColor (albedo (0.65, 0.05, 0.05))
-         let white = Lambertian $ ConstantColor (albedo (0.73, 0.73, 0.73))
-         let green = Lambertian $ ConstantColor (albedo (0.12, 0.45, 0.15))
-         let light = DiffuseLight $ ConstantColor (albedo (15, 15, 15))
          makeBVH
            (Just (t0, t1))
            (rect YZPlane 0 555 0 555 555 green
             :<| rect YZPlane 0 555 0 555 0 red
-            :<| rect XZPlane 213 343 227 332 554 light
+            :<| lightHittable
             :<| rect XZPlane 0 555 0 555 0 white
             :<| rect XZPlane 0 555 0 555 555 white
             :<| rect XYPlane 0 555 0 555 555 white
-            :<| translate
-              (point3 (265, 0, 295))
-              (rotate
-                 YAxis
-                 15
-                 (cuboid (point3 (0, 0, 0)) (point3 (165, 330, 165)) white))
-            :<| translate
-              (point3 (130, 0, 65))
-              (rotate YAxis (-18)
-               $ cuboid (point3 (0, 0, 0)) (point3 (165, 165, 165)) white)
+            :<| box1
+            :<| glassSphere
             :<| Empty))
       (dummyRenderEnv gRef)
+    lights <- runReaderT
+      (do
+         makeBVH (Just (t0, t1)) (lightHittable :<| glassSphere :<| Empty))
+      (dummyRenderEnv gRef)
     g1 <- readSTRef gRef
-    return ((world, albedo (0.0, 0.0, 0.0)), g1)
+    return ((world, lights, albedo (0.0, 0.0, 0.0)), g1)
 
 makeCornellSmokeBoxScene :: Time -> Time -> RandGen -> (Scene, RandGen)
 makeCornellSmokeBoxScene t0 t1 gen = runST $ do
   gRef <- newSTRef gen
+  let light = DiffuseLight $ ConstantColor (albedo (7, 7, 7))
+  let lightHittable = rect XZPlane 113 443 127 432 554 light
   world <-
     runReaderT
       ( do
           let red = Lambertian $ ConstantColor (albedo (0.65, 0.05, 0.05))
           let white = Lambertian $ ConstantColor (albedo (0.73, 0.73, 0.73))
           let green = Lambertian $ ConstantColor (albedo (0.12, 0.45, 0.15))
-          let light = DiffuseLight $ ConstantColor (albedo (7, 7, 7))
           makeBVH
             (Just (t0, t1))
             ( rect YZPlane 0 555 0 555 555 green
                 :<| rect YZPlane 0 555 0 555 0 red
-                :<| rect XZPlane 113 443 127 432 554 light
+                :<| lightHittable
                 :<| rect XZPlane 0 555 0 555 0 white
                 :<| rect XZPlane 0 555 0 555 555 white
                 :<| rect XYPlane 0 555 0 555 555 white
@@ -104,7 +115,7 @@ makeCornellSmokeBoxScene t0 t1 gen = runST $ do
       )
       (dummyRenderEnv gRef)
   g1 <- readSTRef gRef
-  return ((world, albedo (0.0, 0.0, 0.0)), g1)
+  return ((world, lightHittable, albedo (0.0, 0.0, 0.0)), g1)
 
 cornellCamera :: (Int, Int) -> Camera
 cornellCamera (imageWidth, imageHeight) =
@@ -120,26 +131,28 @@ cornellCamera (imageWidth, imageHeight) =
     1.0
 
 makeSimpleLightScene :: Time -> Time -> RandGen -> (Scene, RandGen)
-makeSimpleLightScene t0 t1 gen = runST $ do
-  gRef <- newSTRef gen
-  world <-
-    runReaderT
-      ( do
-          perText <- makePerlin 1.0
-          let difflight = DiffuseLight $ ConstantColor $ albedo (4, 4, 4)
-          makeBVH
-            (Just (t0, t1))
-            ( sphere (point3 (0, -1000, 0)) 1000 (Lambertian perText)
-                --               :<| Sphere (Vec3 (0, 2, 0)) 2 (Lambertian (ConstantColor $ albedo (0.5, 0.0, 0.3)))
-                :<| sphere (point3 (0, 2, 0)) 2 (Lambertian perText)
-                :<| sphere (point3 (0, 7, 0)) 2 difflight
-                :<| rect XYPlane 3 5 1 3 (-2) difflight
-                :<| Empty
-            )
-      )
+makeSimpleLightScene t0 t1 gen = runST
+  $ do
+    gRef <- newSTRef gen
+    let difflight = DiffuseLight $ ConstantColor $ albedo (4, 4, 4)
+    let sphereLight = sphere (point3 (0, 7, 0)) 2 difflight
+    let rectLight = rect XYPlane 3 5 1 3 (-2) difflight
+    (world, lights) <- runReaderT
+      (do
+         perText <- makePerlin 1.0
+         wrld <- makeBVH
+           (Just (t0, t1))
+           (sphere (point3 (0, -1000, 0)) 1000 (Lambertian perText)
+            --               :<| Sphere (Vec3 (0, 2, 0)) 2 (Lambertian (ConstantColor $ albedo (0.5, 0.0, 0.3)))
+            :<| sphere (point3 (0, 2, 0)) 2 (Lambertian perText)
+            :<| sphereLight
+            :<| rectLight
+            :<| Empty)
+         lts <- makeBVH (Just (t0, t1)) (sphereLight :<| rectLight :<| Empty)
+         return (wrld, lts))
       (dummyRenderEnv gRef)
-  g1 <- readSTRef gRef
-  return ((world, albedo (0.0, 0.0, 0.0)), g1)
+    g1 <- readSTRef gRef
+    return ((world, lights, albedo (0.0, 0.0, 0.0)), g1)
 
 earthTexture :: IO Texture
 earthTexture = do
@@ -163,7 +176,7 @@ makeEarthScene earthTex t0 t1 gen =
         )
         (dummyRenderEnv gRef)
     g1 <- readSTRef gRef
-    return ((world, albedo (1.00, 1.00, 1.00)), g1)
+    return ((world, Unhittable, albedo (1.00, 1.00, 1.00)), g1)
 
 twoSpheresSceneCamera :: (Int, Int) -> Camera
 twoSpheresSceneCamera (imageWidth, imageHeight) =
@@ -195,7 +208,7 @@ makeTwoPerlinSpheresScene t0 t1 gen =
         )
         (dummyRenderEnv gRef)
     g1 <- readSTRef gRef
-    return ((world, albedo (0, 0, 0)), g1)
+    return ((world, Unhittable, albedo (0, 0, 0)), g1)
 
 makeTwoSpheresScene :: Time -> Time -> RandGen -> (Scene, RandGen)
 makeTwoSpheresScene t0 t1 gen =
@@ -221,7 +234,7 @@ makeTwoSpheresScene t0 t1 gen =
         )
         (dummyRenderEnv gRef)
     g1 <- readSTRef gRef
-    return ((world, albedo (0.8, 0.8, 0.9)), g1)
+    return ((world, Unhittable, albedo (0.8, 0.8, 0.9)), g1)
 
 randomSceneCamera :: (Int, Int) -> Camera
 randomSceneCamera (imageWidth, imageHeight) =
@@ -267,7 +280,7 @@ makeRandomSceneBookOne gen = runST $ do
       nps <- catMaybes <$> mapM makeRandomSphereM ns
       world <-
         makeBVH (Just (0.0, 1.0)) $ ground :<| s1 :<| s2 :<| s3 :<| S.fromList nps
-      return (world, albedo (0.7, 0.8, 0.9))
+      return (world, Unhittable, albedo (0.7, 0.8, 0.9))
     makeRandomSphereM :: (Int, Int) -> RandomState s (Maybe Hittable)
     makeRandomSphereM (a, b) = do
       mat <- randomDoubleM
@@ -347,7 +360,7 @@ makeRandomScene earthtex _ _ gen =
       world <-
         makeBVH (Just (0.0, 1.0)) $
         ground :<| s1 :<| s2 :<| s3 :<| S.fromList nps
-      return (world, albedo (0.7, 0.8, 0.9))
+      return (world, Unhittable, albedo (0.7, 0.8, 0.9))
     makeRandomSphereM :: (Int, Int) -> RandomState s (Maybe Hittable)
     makeRandomSphereM (a, b) = do
       mat <- randomDoubleM
@@ -404,7 +417,7 @@ makeNextWeekFinalScene earthtex t0 t1 gen =
     gRef <- newSTRef gen
     world <- runReaderT makeSceneM (dummyRenderEnv gRef)
     g1 <- readSTRef gRef
-    return ((world, albedo (0, 0, 0)), g1)
+    return ((world, Unhittable, albedo (0, 0, 0)), g1)
   where
     makeSceneM :: RandomState s Hittable
     makeSceneM = do
